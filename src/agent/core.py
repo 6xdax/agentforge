@@ -10,6 +10,7 @@ from .registry import tool_error
 from .memory import InMemoryMemory, MemoryBackend
 from .provider import LLMProvider
 from .types import LLMResponse
+from tools.file_parser import parse_document, get_document_schema
 
 
 class Agent:
@@ -32,6 +33,14 @@ class Agent:
         self.registry = registry or ToolRegistry()
         self.memory = memory
         self.max_iterations = max_iterations
+
+        # Register built-in parse_document tool if registry is new
+        if registry is None:
+            self.registry.register(
+                name="parse_document",
+                schema=get_document_schema(),
+                handler=parse_document,
+            )
 
     async def run(self, user_message: str) -> LLMResponse:
         """Run agent with user message.
