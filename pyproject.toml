@@ -1,0 +1,28 @@
+[project]
+name = "agent"
+version = "0.1.0"
+description = "AgentForge core runtime for pluggable agents"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.97.0",
+    "python-dotenv>=1.2.2",
+    "pydantic-settings>=2.0.0",
+    "pyyaml>=6.0.3",
+]
+
+[project.optional-dependencies]
+validation = ["jsonschema"]
+dev = ["pytest", "ruff", "mypy"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+exclude = [
+    "/res/**",
+    "/test_scripts/**",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent"]
