@@ -41,6 +41,7 @@ from .schema_validator import (
 from .usage import tracker, UsageTracker, TokenUsage, TokenPricing, UsageRecord
 from .session import Session, ConversationRecord, TurnRecord
 from tools.file_parser import parse_document, get_document_schema
+from .mcp import MCPServerConfig, MCPClient, MCPToolProvider
 
 __all__ = [
     # Core
@@ -87,4 +88,8 @@ __all__ = [
     # File parser
     "parse_document",
     "get_document_schema",
+    # MCP
+    "MCPServerConfig",
+    "MCPClient",
+    "MCPToolProvider",
 ]

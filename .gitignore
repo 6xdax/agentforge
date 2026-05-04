@@ -11,8 +11,8 @@ htmlcov/
 
 build/
 dist/
-examples/chatbot/frontend/node_modules/
-examples/chatbot/frontend/dist/
+node_modules/
+dist/
 *.egg-info/
 res/
 
