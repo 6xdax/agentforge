@@ -2,12 +2,15 @@
 
 import asyncio
 import json
+import logging
 import subprocess
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Optional
 
-from .registry import ToolRegistry, tool_result, tool_error
+from .registry import ToolRegistry, tool_error
 from .errors import ToolError
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -19,24 +22,35 @@ class MCPServerConfig:
 
 
 class MCPClient:
-    """Client for connecting to MCP servers and exposing their tools.
+    """Production-grade async JSON-RPC client for MCP servers.
 
-    Supports stdio-based MCP servers. Tools are registered with a
-    ToolRegistry instance for use by the Agent.
-
-    Example:
-        config = MCPServerConfig(command="npx", args=["-y", "@anthropic/mcp-server filesystem"])
-        async with MCPClient(config) as client:
-            client.register_tools(registry)
-            agent = Agent(provider=provider, registry=registry)
+    Features:
+    - Request-id based routing with pending futures
+    - Independent reader loop (background task)
+    - Notification handling
+    - stderr log streaming
+    - Thread-safe request-id generation (no global lock on operations)
+    - Proper cleanup on disconnect (cancels pending tasks)
+    - Timeout support for tool calls
+    - Strict error checking for initialize and tools/list
     """
 
     def __init__(self, config: MCPServerConfig):
         self.config = config
         self._process: Optional[subprocess.Popen] = None
+        self._reader_task: Optional[asyncio.Task] = None
+        self._stderr_task: Optional[asyncio.Task] = None
+
+        # Request-id counter and pending responses
         self._request_id = 0
+        self._pending: dict[int, asyncio.Future] = {}
+        self._id_lock = asyncio.Lock()
+
+        # Tool cache
         self._tools: dict[str, dict] = {}
-        self._lock = asyncio.Lock()
+
+        # Control flags
+        self._running = False
 
     async def __aenter__(self):
         await self.connect()
@@ -47,6 +61,9 @@ class MCPClient:
 
     async def connect(self) -> None:
         """Connect to the MCP server and discover available tools."""
+        if self._running:
+            return
+
         cmd = self.config.command
         args = self.config.args or []
         env = self.config.env or {}
@@ -66,112 +83,278 @@ class MCPClient:
             stderr=asyncio.subprocess.PIPE,
         )
 
-        # Initialize and discover tools
-        await self._send_request("initialize", {
+        self._running = True
+
+        # Start background tasks
+        self._reader_task = asyncio.create_task(self._reader_loop())
+        self._stderr_task = asyncio.create_task(self._stderr_reader())
+
+        # Initialize - strict error checking
+        result = await self._send_request("initialize", {
             "protocolVersion": "2024-11-05",
             "capabilities": {"tools": {}},
             "clientInfo": {"name": "agentforge", "version": "0.1.0"},
         })
-
-        # Read initial response
-        await self._read_response()
+        if "error" in result:
+            raise ToolError(f"initialize failed: {result['error']}")
 
         # Send initialized notification
-        await self._send_notification("notifications/initialized", {
-            "capabilities": {"tools": {}},
-        })
+        await self._send_notification("notifications/initialized")
 
-        # Discover tools
+        # Discover tools - strict error checking
         await self._discover_tools()
 
     async def disconnect(self) -> None:
-        """Disconnect from the MCP server."""
+        """Disconnect from the MCP server and clean up all pending tasks."""
+        if not self._running:
+            return
+
+        self._running = False
+
+        # Cancel reader task
+        if self._reader_task:
+            self._reader_task.cancel()
+            try:
+                await self._reader_task
+            except asyncio.CancelledError:
+                pass
+            self._reader_task = None
+
+        # Cancel stderr reader
+        if self._stderr_task:
+            self._stderr_task.cancel()
+            try:
+                await self._stderr_task
+            except asyncio.CancelledError:
+                pass
+            self._stderr_task = None
+
+        # Fail all pending requests with disconnect error
+        async with self._id_lock:
+            for req_id, future in self._pending.items():
+                if not future.done():
+                    future.set_exception(ToolError("MCP server disconnected"))
+            self._pending.clear()
+
+        # Terminate process
         if self._process:
             self._process.terminate()
             try:
                 await asyncio.wait_for(self._process.wait(), timeout=5.0)
             except asyncio.TimeoutError:
                 self._process.kill()
+                await self._process.wait()
             self._process = None
 
-    async def _send_request(self, method: str, params: dict = None) -> dict:
-        """Send a JSON-RPC request and wait for response."""
-        if not self._process or self._process.stdin is None or self._process.stdout is None:
+    async def _stderr_reader(self) -> None:
+        """Background task to read stderr and log server output."""
+        if not self._process or not self._process.stderr:
+            return
+
+        try:
+            while self._running:
+                try:
+                    line = await self._process.stderr.readline()
+                    if line:
+                        logger.debug("MCP server stderr: %s", line.decode().strip())
+                    else:
+                        break
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    if self._running:
+                        logger.warning("MCP stderr reader error: %s", e)
+                    break
+        except Exception as e:
+            logger.warning("MCP stderr reader failed: %s", e)
+
+    async def _reader_loop(self) -> None:
+        """Background reader loop that routes responses to pending futures."""
+        if not self._process or not self._process.stdout:
+            return
+
+        try:
+            while self._running:
+                try:
+                    line = await self._process.stdout.readline()
+                except asyncio.CancelledError:
+                    break
+
+                if not line:
+                    # Server disconnected - fail all pending
+                    logger.warning("MCP server disconnected")
+                    break
+
+                try:
+                    msg = json.loads(line.decode())
+                except json.JSONDecodeError as e:
+                    logger.warning("Invalid JSON from MCP server: %s", e)
+                    continue
+
+                # Route message
+                await self._route_message(msg)
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error("MCP reader loop error: %s", e)
+        finally:
+            # On disconnect, fail all pending with disconnect error
+            async with self._id_lock:
+                for _, future in self._pending.items():
+                    if not future.done():
+                        future.set_exception(ToolError("MCP server disconnected"))
+                self._pending.clear()
+
+    async def _route_message(self, msg: dict) -> None:
+        """Route a JSON-RPC message to the appropriate handler."""
+        if "id" not in msg:
+            # Notification - handle if needed
+            await self._handle_notification(msg)
+            return
+
+        msg_id = msg["id"]
+
+        async with self._id_lock:
+            future = self._pending.pop(msg_id, None)
+
+        if future is None:
+            logger.warning("Received response for unknown request id: %s", msg_id)
+            return
+
+        if not future.done():
+            if "error" in msg:
+                future.set_result(msg)
+            elif "result" in msg:
+                future.set_result(msg)
+            else:
+                future.set_result(msg)
+
+    async def _handle_notification(self, msg: dict) -> None:
+        """Handle incoming notifications."""
+        method = msg.get("method", "")
+
+        if method == "tools/list_changed":
+            # Server notified that tools changed, rediscover
+            try:
+                await self._discover_tools()
+            except Exception as e:
+                logger.warning("Failed to rediscover tools: %s", e)
+
+    async def _next_id(self) -> int:
+        """Get next request ID (thread-safe)."""
+        async with self._id_lock:
+            self._request_id += 1
+            return self._request_id
+
+    async def _send_request(self, method: str, params: dict = None, timeout: float = 30.0) -> dict:
+        """Send a JSON-RPC request and wait for response with timeout."""
+        if not self._running or not self._process or self._process.stdin is None:
             raise ToolError("Not connected to MCP server")
 
-        self._request_id += 1
-        req_id = self._request_id
+        req_id = await self._next_id()
+        loop = asyncio.get_running_loop()
 
         request = {"jsonrpc": "2.0", "id": req_id, "method": method}
-        if params:
+        if params is not None:
             request["params"] = params
 
-        req_json = json.dumps(request) + "\n"
-        self._process.stdin.write(req_json.encode())
-        await self._process.stdin.drain()
+        future = loop.create_future()
+        async with self._id_lock:
+            self._pending[req_id] = future
 
-        return await self._read_response()
+        try:
+            req_json = json.dumps(request) + "\n"
+            try:
+                self._process.stdin.write(req_json.encode())
+                await self._process.stdin.drain()
+            except BrokenPipeError:
+                async with self._id_lock:
+                    self._pending.pop(req_id, None)
+                raise ToolError("MCP server stdin pipe broken")
+
+            result = await asyncio.wait_for(future, timeout=timeout)
+            return result
+        except asyncio.TimeoutError:
+            async with self._id_lock:
+                self._pending.pop(req_id, None)
+            raise ToolError(f"Request {method} timed out after {timeout}s")
+        except asyncio.CancelledError:
+            async with self._id_lock:
+                self._pending.pop(req_id, None)
+            raise
+        except ToolError:
+            raise
 
     async def _send_notification(self, method: str, params: dict = None) -> None:
         """Send a JSON-RPC notification (no response expected)."""
-        if not self._process or self._process.stdin is None:
-            raise ToolError("Not connected to MCP server")
+        if not self._running or not self._process or self._process.stdin is None:
+            return  # Silently ignore notifications when disconnected
 
         notification = {"jsonrpc": "2.0", "method": method}
-        if params:
+        if params is not None:
             notification["params"] = params
 
-        notif_json = json.dumps(notification) + "\n"
-        self._process.stdin.write(notif_json.encode())
-        await self._process.stdin.drain()
-
-    async def _read_response(self) -> dict:
-        """Read a JSON-RPC response from stdout."""
-        if not self._process or self._process.stdout is None:
-            raise ToolError("Not connected to MCP server")
-
-        line = await self._process.stdout.readline()
-        if not line:
-            raise ToolError("MCP server disconnected")
-        return json.loads(line.decode())
+        try:
+            notif_json = json.dumps(notification) + "\n"
+            self._process.stdin.write(notif_json.encode())
+            await self._process.stdin.drain()
+        except BrokenPipeError:
+            pass  # Server disconnected, notification not critical
 
     async def _discover_tools(self) -> None:
-        """Discover available tools from the MCP server."""
-        try:
-            response = await self._send_request("tools/list")
-            if "result" in response and "tools" in response["result"]:
-                for tool in response["result"]["tools"]:
-                    self._tools[tool["name"]] = tool
-        except Exception:
-            pass  # Server may not support tools/list
+        """Discover available tools from the MCP server with strict error checking."""
+        response = await self._send_request("tools/list")
 
-    async def call_tool(self, name: str, arguments: dict) -> str:
+        if "error" in response:
+            raise ToolError(f"tools/list failed: {response['error']}")
+
+        if "result" not in response or "tools" not in response.get("result", {}):
+            raise ToolError("Invalid tools/list response: missing result.tools")
+
+        tools = response["result"]["tools"]
+        self._tools.clear()
+        for tool in tools:
+            # Skip tools without name to prevent crash
+            if "name" not in tool:
+                logger.warning("Skipping tool without name: %s", tool)
+                continue
+            self._tools[tool["name"]] = tool
+
+    async def call_tool(self, name: str, arguments: dict, timeout: float = 60.0) -> str:
         """Call an MCP tool by name with arguments.
 
         Args:
             name: Tool name
             arguments: Tool arguments
+            timeout: Operation timeout in seconds (default 60s)
 
         Returns:
             JSON string result
         """
-        async with self._lock:
-            try:
-                response = await self._send_request("tools/call", {
-                    "name": name,
-                    "arguments": arguments,
-                })
-                if "result" in response:
-                    result = response["result"]
-                    if isinstance(result, dict) and "content" in result:
-                        # Return the content as JSON
-                        return json.dumps(result["content"])
-                    return json.dumps(result)
-                elif "error" in response:
-                    return tool_error(response["error"].get("message", "Unknown error"))
-                return tool_result({"status": "ok"})
-            except Exception as e:
-                return tool_error(f"MCP tool call failed: {e}")
+        if not self._running:
+            return tool_error("Not connected to MCP server")
+
+        try:
+            response = await self._send_request("tools/call", {
+                "name": name,
+                "arguments": arguments,
+            }, timeout=timeout)
+
+            if "error" in response:
+                return tool_error(response["error"].get("message", "Unknown error"))
+
+            if "result" in response:
+                result = response["result"]
+                if isinstance(result, dict) and "content" in result:
+                    return json.dumps(result["content"])
+                return json.dumps(result) if isinstance(result, dict) else json.dumps({"content": result})
+
+            return json.dumps({"status": "ok"})
+
+        except ToolError:
+            raise
+        except Exception as e:
+            return tool_error(f"MCP tool call failed: {e}")
 
     def get_schemas(self) -> list[dict]:
         """Get OpenAI-format schemas for all discovered MCP tools."""
@@ -198,9 +381,15 @@ class MCPClient:
             registry.register(
                 name=name,
                 schema=schema,
-                handler=lambda args, n=name: self.call_tool(n, args),
+                handler=self._make_tool_handler(name),
                 description=tool.get("description", ""),
             )
+
+    def _make_tool_handler(self, name: str):
+        """Create an async handler for a tool."""
+        async def handler(args: dict) -> dict:
+            return await self.call_tool(name, args)
+        return handler
 
     def get_tool_schema(self, name: str) -> dict:
         """Get OpenAI-format schema for a specific tool."""
@@ -215,42 +404,3 @@ class MCPClient:
             "description": tool.get("description", ""),
             "parameters": input_schema,
         }
-
-
-class MCPToolProvider:
-    """Mock provider that returns MCP tool calls for testing.
-
-    Use this to test agent flows with MCP tools without a real server.
-    First call returns tool_calls (if tools provided), subsequent calls return final response.
-    """
-
-    def __init__(
-        self,
-        tools: list[dict],
-        response_final: str = "Done",
-        tool_to_call: str = None,
-        tool_args: dict = None,
-    ):
-        self.tools = tools
-        self.response_final = response_final
-        self.tool_to_call = tool_to_call
-        self.tool_args = tool_args or {}
-        self._call_count = 0
-        self._tool_called = False
-
-    async def chat(self, messages: list[dict], tools: list[dict] = None, thinking: Any = None) -> dict:
-        """Return a response, optionally with a tool call."""
-        self._call_count += 1
-
-        # On first call with tools and tool_to_call, return tool call
-        if tools and self.tool_to_call and not self._tool_called:
-            self._tool_called = True
-            return {
-                "content": f"Calling tool: {self.tool_to_call}",
-                "tool_calls": [{
-                    "name": self.tool_to_call,
-                    "arguments": self.tool_args,
-                }],
-            }
-        # Subsequent calls return final response
-        return {"content": self.response_final}

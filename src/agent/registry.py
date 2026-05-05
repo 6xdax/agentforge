@@ -1,6 +1,7 @@
 """Thread-safe tool registry with self-registration support."""
 
 import asyncio
+import inspect
 import json
 import threading
 from typing import Callable, Optional
@@ -76,8 +77,11 @@ class ToolRegistry:
         if not entry:
             raise ToolNotFoundError(f"Unknown tool: {name}")
         try:
-            # Run sync handlers in thread pool to avoid blocking
-            result = await asyncio.to_thread(entry.handler, args)
+            # Handle async handlers directly
+            if inspect.iscoroutinefunction(entry.handler):
+                result = await entry.handler(args)
+            else:
+                result = await asyncio.to_thread(entry.handler, args)
             return result
         except Exception as e:
             return json.dumps({"error": f"{type(e).__name__}: {e}"})
