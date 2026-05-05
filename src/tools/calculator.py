@@ -3,6 +3,8 @@
 import operator
 from typing import Callable
 
+from agent import tool_result, tool_error
+
 OPS = {
     "+": operator.add,
     "-": operator.sub,
@@ -14,17 +16,18 @@ OPS = {
 def _handle(args: dict) -> str:
     """Handle calculator calls."""
     expr = args.get("expression", "")
+    if not expr:
+        return tool_error("expression is required")
+
     try:
-        # Safe evaluation - only allow predefined operators on numbers
         allowed_chars = set("0123456789.+-*/**() ")
         if not all(c in allowed_chars for c in expr.replace(" ", "")):
-            return '{"error": "Invalid characters in expression"}'
+            return tool_error("Invalid characters in expression")
 
-        # Evaluate safely
         result = eval(expr, {"__builtins__": {}}, OPS)
-        return f'{{"result": {result}}}'
+        return tool_result(result=result)
     except Exception as e:
-        return f'{{"error": "{e}"}}'
+        return tool_error(str(e))
 
 
 # Self-registration (called at module import time)

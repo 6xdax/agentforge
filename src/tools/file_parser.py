@@ -1,5 +1,6 @@
 """Document parsing using docling for PDF, DOCX, images, etc."""
 
+import json
 from pathlib import Path
 
 from docling.document_converter import DocumentConverter
@@ -70,11 +71,25 @@ def get_document_schema() -> dict:
     }
 
 
-if "__main__" == __name__:
+async def _handle(args: dict) -> str:
+    """Handle document parsing calls."""
     try:
-        import asyncio
-        file_path = "/home/ubuntu/workspace/agentforge/CLAUDE.md"
-        text_content = asyncio.run(parse_document(file_path, 100000))
-        print(text_content)
+        result = await parse_document(args.get("file_path", ""), args.get("max_text_length", 100000))
+        return json.dumps({"content": result, "success": True})
     except ToolError as e:
-        print(f"Error: {e}")
+        return json.dumps({"error": str(e), "success": False})
+
+
+# Self-registration
+def register(registry):
+    """Register the document parsing tool with the registry."""
+    registry.register(
+        name="parse_document",
+        schema=get_document_schema(),
+        handler=_handle,
+    )
+
+
+register_parse_document = register
+
+__all__ = ["register", "register_parse_document", "parse_document"]

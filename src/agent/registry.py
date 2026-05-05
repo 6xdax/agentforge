@@ -31,11 +31,29 @@ class ToolRegistry:
 
     Tools register themselves by calling registry.register().
     Uses RLock for thread-safe writes and async-safe reads via snapshot pattern.
+
+    Args:
+        tools: Optional list of tool module names to auto-register (e.g., ["calculator", "file_ops"]).
+               Each module should have a `register(registry)` function.
     """
 
-    def __init__(self):
+    def __init__(self, tools: Optional[list[str]] = None):
         self._tools: dict[str, ToolEntry] = {}
         self._lock = threading.RLock()
+
+        if tools:
+            self._load_tools(tools)
+
+    def _load_tools(self, tool_modules: list[str]) -> None:
+        """Load and register tools from module names."""
+        import importlib
+        for module_name in tool_modules:
+            try:
+                module = importlib.import_module(f"tools.{module_name}")
+                if hasattr(module, "register"):
+                    module.register(self)
+            except ImportError:
+                pass
 
     def register(
         self,

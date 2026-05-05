@@ -1,4 +1,4 @@
-"""Runtime tests for Agent with MCP tools.
+"""Runtime tests for Agent with MCP tools (streaming).
 
 Run with:
     uv run python test_scripts/test_mcp.py
@@ -20,7 +20,6 @@ import asyncio
 
 from agent import Agent, ToolRegistry, MCPServerConfig, MCPClient
 from agent.memory import InMemoryMemory
-from agent.registry import tool_result
 from providers.minimax import MiniMaxProvider
 
 
@@ -41,7 +40,11 @@ async def test_mcp_client_connect() -> None:
 
 
 async def test_mcp_client_with_minimax() -> None:
-    """Test agent with real MCP server and MiniMax."""
+    """Test agent with real MCP server and MiniMax (streaming)."""
+    print("\n" + "=" * 50)
+    print("MCP Client with MiniMax (Stream)")
+    print("=" * 50)
+
     config = MCPServerConfig(
         command="npx",
         args=["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
@@ -51,17 +54,37 @@ async def test_mcp_client_with_minimax() -> None:
 
     async with MCPClient(config) as client:
         client.register_tools(registry)
-        agent = Agent(provider=MiniMaxProvider(), registry=registry)
-        result = await agent.run("List files in /tmp")
-        content = result.get("content", "") if isinstance(result, dict) else result
-        print(f"Response: {content}")
-        assert content and len(content) > 0
+        print(f"Discovered tools: {registry.get_names()}")
+
+        provider = MiniMaxProvider()
+        agent = Agent(provider=provider, registry=registry, memory=InMemoryMemory())
+
+        user_msg = "List files in /tmp"
+        print(f"User: {user_msg}")
+        print("\nAssistant: ", end="", flush=True)
+
+        full_content = []
+        async for chunk in agent.run_stream(user_msg):
+            if isinstance(chunk, str):
+                print(chunk, end="", flush=True)
+                full_content.append(chunk)
+            else:
+                chunk_type = chunk.get("type")
+                if chunk_type == "tool_use":
+                    tool_name = chunk.get("tool_name")
+                    if tool_name:
+                        print(f"\n[Tool Call]: {tool_name}", end="", flush=True)
+                elif chunk_type == "thinking":
+                    print(f"\n[Thinking]: {chunk.get('content', '')[:80]}...", end="", flush=True)
+
+        print()
+        assert len(full_content) > 0, "Should have some content"
         print("PASS MCP client with MiniMax")
 
 
 async def main() -> None:
     await test_mcp_client_connect()
-    await test_mcp_client_with_minimax()  # Requires MiniMax API key
+    await test_mcp_client_with_minimax()
     print("\nAll MCP tests passed!")
 
 

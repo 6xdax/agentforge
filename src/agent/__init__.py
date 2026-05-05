@@ -40,6 +40,7 @@ from .schema_validator import (
 )
 from .usage import tracker, UsageTracker, TokenUsage, TokenPricing, UsageRecord
 from .session import Session, ConversationRecord, TurnRecord
+from .skill import SkillLoader
 from tools.file_parser import parse_document, get_document_schema
 from .mcp import MCPServerConfig, MCPClient
 
@@ -85,6 +86,8 @@ __all__ = [
     "Session",
     "ConversationRecord",
     "TurnRecord",
+    # Skill
+    "SkillLoader",
     # File parser
     "parse_document",
     "get_document_schema",
