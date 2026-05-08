@@ -18,7 +18,7 @@ Example usage:
 from .core import Agent
 from .message import Message
 from .registry import ToolRegistry, tool_result, tool_error, ToolEntry
-from .memory import MemoryBackend, InMemoryMemory, SlidingWindowMemory
+from .memory import MemoryBackend, InMemoryMemory, SlidingWindowMemory, SQLiteMemory
 from .provider import LLMProvider, ThinkingLevel, parse_thinking_level
 from .errors import (
     ToolError,
@@ -57,6 +57,7 @@ __all__ = [
     "MemoryBackend",
     "InMemoryMemory",
     "SlidingWindowMemory",
+    "SQLiteMemory",
     # Provider
     "LLMProvider",
     "ThinkingLevel",

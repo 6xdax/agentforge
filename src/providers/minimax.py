@@ -60,6 +60,8 @@ class MiniMaxProvider(LLMProvider):
     Tracks token usage via UsageTracker.
     """
 
+    supports_streaming = True
+
     def __init__(
         self,
         model: Optional[str] = None,
@@ -265,9 +267,13 @@ class MiniMaxProvider(LLMProvider):
                 "type": "done",
                 "content": final_content,
                 "thinking": final_thinking if final_thinking else None,
-                "input_tokens": final_message.usage.input_tokens if final_message.usage else None,
-                "output_tokens": final_message.usage.output_tokens if final_message.usage else None,
-                "cache_write_tokens": getattr(final_message.usage, "cache_creation_input_tokens", None) if final_message.usage else None,
-                "cache_read_tokens": getattr(final_message.usage, "cache_read_tokens", None) if final_message.usage else None,
+                "input_tokens": getattr(getattr(final_message, 'usage', None), 'input_tokens', None),
+                "output_tokens": getattr(getattr(final_message, 'usage', None), 'output_tokens', None),
+                "cache_write_tokens": getattr(getattr(final_message, 'usage', None), 'cache_creation_input_tokens', None),
+                "cache_read_tokens": getattr(getattr(final_message, 'usage', None), 'cache_read_tokens', None),
             }
+            yield done_chunk
+        else:
+            # MiniMax streaming may not return usage in get_final_message
+            done_chunk: StreamChunk = {"type": "done", "content": "", "input_tokens": None, "output_tokens": None, "cache_write_tokens": None, "cache_read_tokens": None}
             yield done_chunk

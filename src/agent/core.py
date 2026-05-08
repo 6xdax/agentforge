@@ -9,7 +9,8 @@ from .registry import ToolRegistry
 from .registry import tool_error
 from .memory import InMemoryMemory, MemoryBackend
 from .provider import LLMProvider
-from .types import LLMResponse
+from .types import LLMResponse, ThinkingLevel
+from .message import StreamChunk
 from tools.file_parser import parse_document, get_document_schema
 
 
@@ -28,11 +29,13 @@ class Agent:
         registry: Optional[ToolRegistry] = None,
         memory: Optional[MemoryBackend] = InMemoryMemory(),
         max_iterations: int = 20,
+        thinking: Optional[ThinkingLevel] = None,
     ):
         self.provider = provider
         self.registry = registry or ToolRegistry()
         self.memory = memory
         self.max_iterations = max_iterations
+        self.thinking = thinking
 
         # Register built-in parse_document tool if registry is new
         if registry is None:
@@ -42,12 +45,18 @@ class Agent:
                 handler=parse_document,
             )
 
-    async def run(self, user_message: str) -> LLMResponse:
+    async def run(self, user_message: str, thinking: Optional[ThinkingLevel] = None) -> LLMResponse:
         """Run agent with user message.
+
+        Args:
+            user_message: The user input message
+            thinking: Thinking effort level, overrides Agent-level setting if provided
 
         Returns:
             LLMResponse with content, tool_calls (executed), thinking, and token usage
         """
+        thinking_level = thinking if thinking is not None else self.thinking
+
         messages: list[Message] = [
             {"role": "user", "content": user_message, "name": None}
         ]
@@ -69,6 +78,7 @@ class Agent:
             response: LLMResponse = await self.provider.chat(
                 messages,
                 tools=self.registry.get_schemas() or None,
+                thinking=thinking_level,
             )
 
             # No tool calls - return final response
@@ -124,12 +134,18 @@ class Agent:
 
         raise MaxIterationsError(tool_error("Max iterations reached"))
 
-    async def run_stream(self, user_message: str) -> AsyncIterator[str]:
+    async def run_stream(self, user_message: str, thinking: Optional[ThinkingLevel] = None) -> AsyncIterator[StreamChunk]:
         """Run agent with streaming response.
 
+        Args:
+            user_message: The user input message
+            thinking: Thinking effort level, overrides Agent-level setting if provided
+
         Yields:
-            Text chunks from the LLM response
+            StreamChunk dicts with type, content, tool_use, tool_result, or done
         """
+        thinking_level = thinking if thinking is not None else self.thinking
+
         messages: list[Message] = [
             {"role": "user", "content": user_message, "name": None}
         ]
@@ -150,13 +166,14 @@ class Agent:
                 response: LLMResponse = await self.provider.chat(
                     messages,
                     tools=self.registry.get_schemas() or None,
+                    thinking=thinking_level,
                 )
                 if not response.get("tool_calls"):
                     final_content = response.get("content", "")
                     if self.memory:
                         await self.memory.add({"role": "user", "content": user_message, "name": None})
                         await self.memory.add({"role": "assistant", "content": final_content, "name": None})
-                    yield final_content
+                    yield {"type": "done", "content": final_content}
                     return
                 # Handle tool calls (simplified - collect and execute)
                 for call in response["tool_calls"]:
@@ -172,34 +189,40 @@ class Agent:
             async for chunk in self.provider.chat_stream(
                 messages,
                 tools=self.registry.get_schemas() or None,
+                thinking=thinking_level,
             ):
                 # print(f"Received chunk: {chunk}")
                 if isinstance(chunk, dict):
                     chunk_type = chunk.get("type")
                     if chunk_type == "thinking":
-                        # print(f"[Thinking]: {chunk.get('content', '')[:100]}...")
-                        pass
+                        yield {"type": "thinking", "content": chunk.get("content", "")}
                     elif chunk_type == "tool_use":
                         tool_name = chunk.get("tool_name")
-                        tool_args = chunk.get("args", {})
+                        tool_args = chunk.get("arguments", {})
                         tool_call_id = chunk.get("tool_call_id")
                         if tool_name:
-                            print(f"[Tool Call]: {tool_name}")
                             tool_calls_found.append({"name": tool_name, "args": tool_args, "call_id": tool_call_id})
                             result = await self.registry.dispatch(tool_name, tool_args)
                             messages.append({"role": "tool", "content": result, "name": tool_name})
                             yield {
                                 "type": "tool_result",
-                                "tool_name": tool_name,
                                 "tool_call_id": tool_call_id,
-                                "result": result
+                                "tool_name": tool_name,
+                                "result": result,
                             }
                     elif chunk_type == "done":
-                        # done chunk - end this iteration
+                        yield {
+                            "type": "done",
+                            "content": full_content,
+                            "input_tokens": chunk.get("input_tokens"),
+                            "output_tokens": chunk.get("output_tokens"),
+                            "cache_write_tokens": chunk.get("cache_write_tokens"),
+                            "cache_read_tokens": chunk.get("cache_read_tokens"),
+                        }
                         break
                 else:
                     full_content += chunk
-                    yield chunk
+                    yield {"type": "text", "content": chunk}
 
             # After streaming, execute any tool calls using non-streaming chat
             # (streaming doesn't return tool call results in the stream itself)
@@ -208,6 +231,7 @@ class Agent:
                 response = await self.provider.chat(
                     messages,
                     tools=self.registry.get_schemas() or None,
+                    thinking=thinking_level,
                 )
                 if response.get("tool_calls"):
                     for call in response["tool_calls"]:

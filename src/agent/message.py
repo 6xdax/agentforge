@@ -43,11 +43,11 @@ class StreamChunk(TypedDict, total=False):
     - done: Streaming complete
     """
     type: str  # "text" | "thinking" | "tool_use" | "tool_result" | "done"
-    content: Optional[str] = None
-    arguments: Optional[dict] = None
-    tool_use_id: Optional[str] = None
-    tool_call_id: Optional[str] = None
-    tool_name: Optional[str] = None
+    content: Optional[str] = None          # text, thinking, done
+    tool_call_id: Optional[str] = None    # tool_use, tool_result
+    tool_name: Optional[str] = None       # tool_use, tool_result
+    arguments: Optional[dict] = None     # tool_use
+    result: Optional[str] = None          # tool_result
     # Token usage (only in "done" chunk)
     input_tokens: Optional[int] = None
     output_tokens: Optional[int] = None

@@ -1,8 +1,11 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { memo, useState, useEffect, useRef, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 const STORAGE_KEY = 'agentforge_chats_v3'
+const PERSIST_DEBOUNCE_MS = 500
+const INITIAL_VISIBLE_MESSAGES = 80
+const MESSAGE_PAGE_SIZE = 80
 
 function App() {
   const [chats, setChats] = useState({})
@@ -15,6 +18,59 @@ function App() {
   const typingQueueRef = useRef([])
   const typingTimerRef = useRef(null)
   const hasStreamedContentRef = useRef(false)
+  const persistTimerRef = useRef(null)
+  const persistSnapshotRef = useRef(null)
+
+  // Thinking typewriter
+  const thinkingQueueRef = useRef([])       // queue of strings to type
+  const typingThinkingTimerRef = useRef(null)
+
+  const stopThinkingTypewriter = useCallback(() => {
+    if (typingThinkingTimerRef.current) {
+      clearTimeout(typingThinkingTimerRef.current)
+      typingThinkingTimerRef.current = null
+    }
+    thinkingQueueRef.current = []
+  }, [])
+
+  const runThinkingTypewriter = useCallback(() => {
+    if (typingThinkingTimerRef.current || thinkingQueueRef.current.length === 0) return
+
+    const tick = () => {
+      // Get next string from queue
+      const next = thinkingQueueRef.current.shift()
+      if (next == null) {
+        typingThinkingTimerRef.current = null
+        return
+      }
+
+      // Append this chunk to message.thinking (which is already accumulated)
+      setChats(prev => {
+        const chatId = activeChatIdRef.current
+        const current = prev[chatId]
+        if (!current || current.messages.length === 0) return prev
+        const messages = [...current.messages]
+        const lastMsg = messages[messages.length - 1]
+        if (!lastMsg || lastMsg.role !== 'assistant') return prev
+        messages[messages.length - 1] = { ...lastMsg, thinking: (lastMsg.thinking || '') + next }
+        return { ...prev, [chatId]: { ...current, messages } }
+      })
+
+      if (thinkingQueueRef.current.length > 0) {
+        typingThinkingTimerRef.current = setTimeout(tick, 10)
+      } else {
+        typingThinkingTimerRef.current = null
+      }
+    }
+    typingThinkingTimerRef.current = setTimeout(tick, 10)
+  }, [])
+
+  const enqueueThinking = useCallback((text) => {
+    if (!text) return
+    // Split each chunk into individual characters for typewriter effect
+    thinkingQueueRef.current.push(...Array.from(text))
+    runThinkingTypewriter()
+  }, [runThinkingTypewriter])
 
   // Load chats from localStorage
   useEffect(() => {
@@ -67,9 +123,33 @@ function App() {
     }
   }, [])
 
-  const saveChats = useCallback((newChats) => {
+  const persistChatsNow = useCallback((newChats) => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(newChats))
   }, [])
+
+  const schedulePersistChats = useCallback((newChats) => {
+    persistSnapshotRef.current = newChats
+    if (persistTimerRef.current) return
+
+    persistTimerRef.current = setTimeout(() => {
+      persistTimerRef.current = null
+      if (persistSnapshotRef.current) {
+        persistChatsNow(persistSnapshotRef.current)
+        persistSnapshotRef.current = null
+      }
+    }, PERSIST_DEBOUNCE_MS)
+  }, [persistChatsNow])
+
+  const flushPersistChats = useCallback(() => {
+    if (persistTimerRef.current) {
+      clearTimeout(persistTimerRef.current)
+      persistTimerRef.current = null
+    }
+    if (persistSnapshotRef.current) {
+      persistChatsNow(persistSnapshotRef.current)
+      persistSnapshotRef.current = null
+    }
+  }, [persistChatsNow])
 
   useEffect(() => {
     activeChatIdRef.current = currentChatId
@@ -83,6 +163,7 @@ function App() {
     typingQueueRef.current = []
   }, [])
 
+
   const runTypewriter = useCallback(() => {
     if (typingTimerRef.current || typingQueueRef.current.length === 0) return
 
@@ -92,6 +173,8 @@ function App() {
         typingTimerRef.current = null
         return
       }
+
+      const shouldPersistAfterTick = typingQueueRef.current.length === 0
 
       setChats(prev => {
         const chatId = activeChatIdRef.current
@@ -116,7 +199,9 @@ function App() {
             messages
           }
         }
-        saveChats(updated)
+        if (shouldPersistAfterTick) {
+          schedulePersistChats(updated)
+        }
         return updated
       })
 
@@ -129,7 +214,7 @@ function App() {
     }
     // 打字的速度，小则更快
     typingTimerRef.current = setTimeout(tick, 18)
-  }, [saveChats])
+  }, [schedulePersistChats])
 
   const enqueueTypewriter = useCallback((text) => {
     if (!text) return
@@ -142,8 +227,12 @@ function App() {
       if (typingTimerRef.current) {
         clearTimeout(typingTimerRef.current)
       }
+      if (typingThinkingTimerRef.current) {
+        clearTimeout(typingThinkingTimerRef.current)
+      }
+      flushPersistChats()
     }
-  }, [])
+  }, [flushPersistChats])
 
   const createNewChat = useCallback(() => {
     const chatId = Date.now().toString()
@@ -155,12 +244,12 @@ function App() {
     }
     setChats(prev => {
       const updated = { ...prev, [chatId]: newChat }
-      saveChats(updated)
+      schedulePersistChats(updated)
       return updated
     })
     setCurrentChatId(chatId)
     setSidebarOpen(false)
-  }, [saveChats])
+  }, [schedulePersistChats])
 
   const switchChat = useCallback((chatId) => {
     setCurrentChatId(chatId)
@@ -173,7 +262,7 @@ function App() {
     setChats(prev => {
       const updated = { ...prev }
       delete updated[chatId]
-      saveChats(updated)
+      schedulePersistChats(updated)
       return updated
     })
     if (currentChatId === chatId) {
@@ -184,7 +273,7 @@ function App() {
         createNewChat()
       }
     }
-  }, [currentChatId, chats, saveChats, createNewChat])
+  }, [currentChatId, chats, schedulePersistChats, createNewChat])
 
   const updateChatTitle = useCallback((chatId, firstMessage) => {
     const title = firstMessage.substring(0, 30) + (firstMessage.length > 30 ? '...' : '')
@@ -193,15 +282,16 @@ function App() {
         ...prev,
         [chatId]: { ...prev[chatId], title }
       }
-      saveChats(updated)
+      schedulePersistChats(updated)
       return updated
     })
-  }, [saveChats])
+  }, [schedulePersistChats])
 
   const sendMessage = useCallback(async (text) => {
     if (!text.trim() || isGenerating) return
 
     stopTypewriter()
+    stopThinkingTypewriter()
     hasStreamedContentRef.current = false
 
     const userMsg = {
@@ -218,7 +308,7 @@ function App() {
           messages: [...prev[currentChatId].messages, userMsg]
         }
       }
-      saveChats(updated)
+      schedulePersistChats(updated)
       return updated
     })
 
@@ -248,13 +338,13 @@ function App() {
           messages: [...prev[currentChatId].messages, assistantMsg]
         }
       }
-      saveChats(updated)
+      schedulePersistChats(updated)
       return updated
     })
 
     try {
-      const basePath = window.location.pathname.replace(/\/[^/]*$/, '') || ''
-      const apiUrl = `${basePath}/api/chat`
+      const baseUrl = import.meta.env.BASE_URL || '/'
+      const apiUrl = `${baseUrl}api/chat`
       const response = await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -310,10 +400,11 @@ function App() {
                   const messages = [...chat.messages]
                   const lastMsg = { ...messages[messages.length - 1] }
                   let updated = false
+                  let persistNeeded = false
 
                   switch (currentEvent) {
                     case 'thinking':
-                      lastMsg.thinking = json.content
+                      enqueueThinking(json.content)
                       updated = true
                       break
                     case 'tool_call':
@@ -321,6 +412,7 @@ function App() {
                         lastMsg.tool_calls = [...lastMsg.tool_calls, json.tool_name]
                       }
                       updated = true
+                      persistNeeded = true
                       break
                     case 'tool_result':
                       // Store tool results for potential display
@@ -331,18 +423,25 @@ function App() {
                         tool_call_id: json.tool_call_id
                       })
                       updated = true
+                      persistNeeded = true
                       break
                     case 'done':
+                      stopThinkingTypewriter()
                       lastMsg.thinkingCompleted = true
+                      if (json.usage) {
+                        lastMsg.usage = json.usage
+                      }
                       if (json.content && !hasStreamedContentRef.current) {
                         hasStreamedContentRef.current = true
                         enqueueTypewriter(json.content)
                       }
                       updated = true
+                      persistNeeded = true
                       break
                     case 'error':
                       lastMsg.content = `Error: ${json.message}`
                       updated = true
+                      persistNeeded = true
                       break
                   }
 
@@ -350,7 +449,9 @@ function App() {
                     messages[messages.length - 1] = lastMsg
                     chat.messages = messages
                     updatedChats[currentChatId] = chat
-                    saveChats(updatedChats)
+                    if (persistNeeded) {
+                      schedulePersistChats(updatedChats)
+                    }
                     return updatedChats
                   }
                   return prev
@@ -374,7 +475,7 @@ function App() {
           messages[messages.length - 1] = lastMsg
           chat.messages = messages
           updatedChats[currentChatId] = chat
-          saveChats(updatedChats)
+          schedulePersistChats(updatedChats)
           return updatedChats
         })
         enqueueTypewriter(data.response || '')
@@ -392,11 +493,12 @@ function App() {
           messages[messages.length - 1] = lastMsg
           chat.messages = messages
           updatedChats[currentChatId] = chat
-          saveChats(updatedChats)
+          schedulePersistChats(updatedChats)
           return updatedChats
         })
       }
     } finally {
+      flushPersistChats()
       setIsGenerating(false)
       abortControllerRef.current = null
     }
@@ -405,10 +507,12 @@ function App() {
     isGenerating,
     thinkingEnabled,
     chats,
-    saveChats,
+    schedulePersistChats,
     updateChatTitle,
     stopTypewriter,
-    enqueueTypewriter
+    stopThinkingTypewriter,
+    enqueueTypewriter,
+    flushPersistChats
   ])
 
   const stopGeneration = useCallback(() => {
@@ -416,7 +520,8 @@ function App() {
       abortControllerRef.current.abort()
     }
     stopTypewriter()
-  }, [stopTypewriter])
+    stopThinkingTypewriter()
+  }, [stopTypewriter, stopThinkingTypewriter])
 
   const currentChat = chats[currentChatId]
 
@@ -503,12 +608,19 @@ function MainContent({
   onToggleSidebar
 }) {
   const [inputValue, setInputValue] = useState('')
+  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_MESSAGES)
   const messagesEndRef = useRef(null)
   const messages = chat?.messages || []
+  const hiddenCount = Math.max(0, messages.length - visibleCount)
+  const visibleMessages = hiddenCount > 0 ? messages.slice(-visibleCount) : messages
+
+  useEffect(() => {
+    setVisibleCount(INITIAL_VISIBLE_MESSAGES)
+  }, [chat?.id])
 
   useEffect(() => {
     if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' })
+      messagesEndRef.current.scrollIntoView({ behavior: messages.length > 120 ? 'auto' : 'smooth' })
     }
   }, [messages])
 
@@ -563,13 +675,26 @@ function MainContent({
         {messages.length === 0 ? (
           <WelcomeScreen onSendMessage={onSendMessage} />
         ) : (
-          messages.map((msg, idx) => (
-            <Message
-              key={idx}
-              message={msg}
-              thinkingEnabled={thinkingEnabled}
-            />
-          ))
+          <>
+            {hiddenCount > 0 && (
+              <div className="load-more-wrap">
+                <button
+                  type="button"
+                  className="load-more-btn"
+                  onClick={() => setVisibleCount(prev => prev + MESSAGE_PAGE_SIZE)}
+                >
+                  加载更早消息 ({hiddenCount} 条)
+                </button>
+              </div>
+            )}
+            {visibleMessages.map((msg, idx) => (
+              <Message
+                key={msg.timestamp || `${msg.role}-${idx}`}
+                message={msg}
+                thinkingEnabled={thinkingEnabled}
+              />
+            ))}
+          </>
         )}
         <div ref={messagesEndRef} />
       </div>
@@ -629,7 +754,7 @@ function MainContent({
   )
 }
 
-function Message({ message, thinkingEnabled }) {
+const Message = memo(function Message({ message, thinkingEnabled }) {
   const [thinkingExpanded, setThinkingExpanded] = useState(true)
   const isUser = message.role === 'user'
 
@@ -657,10 +782,23 @@ function Message({ message, thinkingEnabled }) {
         <div className={`message-body ${isUser ? 'user-bubble' : 'assistant-text'}`}>
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
         </div>
+
+        {!isUser && message.usage && (
+          <div className="usage-info">
+            <span>输入: {message.usage.input_tokens ?? 0} tokens</span>
+            <span>输出: {message.usage.output_tokens ?? 0} tokens</span>
+            {message.usage.cache_write_tokens != null && (
+              <span>缓存写入: {message.usage.cache_write_tokens}</span>
+            )}
+            {message.usage.cache_read_tokens != null && (
+              <span>缓存读取: {message.usage.cache_read_tokens}</span>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )
-}
+})
 
 function ThinkingIndicator({ thinking, completed, expanded, onToggle }) {
   return (

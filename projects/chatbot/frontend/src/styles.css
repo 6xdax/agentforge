@@ -302,6 +302,28 @@ body,
   background: #d7deea;
 }
 
+.load-more-wrap {
+  max-width: 880px;
+  margin: 0 auto 12px;
+  padding: 0 22px;
+}
+
+.load-more-btn {
+  border: 1px solid var(--border);
+  background: #ffffff;
+  color: var(--text-secondary);
+  border-radius: 999px;
+  font-size: 12px;
+  padding: 7px 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.load-more-btn:hover {
+  background: var(--bg-soft);
+  border-color: #d1d8e5;
+}
+
 .message {
   max-width: 880px;
   margin: 0 auto 20px;
@@ -594,6 +616,14 @@ body,
   height: 12px;
 }
 
+.usage-info {
+  display: flex;
+  gap: 12px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 .welcome-screen {
   max-width: 850px;
   margin: 0 auto;
@@ -837,6 +867,10 @@ body,
   .message {
     padding: 0 14px;
     margin-bottom: 16px;
+  }
+
+  .load-more-wrap {
+    padding: 0 14px;
   }
 
   .welcome-screen {
