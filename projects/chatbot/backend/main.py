@@ -8,7 +8,10 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 import asyncio
 import json
-from typing import Optional
+from typing import Optional, AsyncGenerator, Union
+from enum import Enum
+from dataclasses import dataclass, asdict
+from datetime import datetime
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(name)s | %(levelname)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
 logger = logging.getLogger("chatbot")
@@ -17,6 +20,83 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
+
+
+# =============================================================================
+# SSE Message Protocol - 统一的事件类型定义
+# =============================================================================
+
+class SSEEventType(str, Enum):
+    """SSE 事件类型枚举"""
+    THINKING = "thinking"       # AI 思考过程
+    TOOL_CALL = "tool_call"     # 工具调用开始
+    TOOL_RESULT = "tool_result" # 工具调用结果
+    CONTENT = "content"         # 普通文本内容
+    DONE = "done"              # 完成信号
+    ERROR = "error"            # 错误
+
+
+@dataclass
+class SSEMessage:
+    """SSE 消息结构"""
+    event: SSEEventType
+    data: dict
+
+    def to_sse_format(self) -> str:
+        """转换为 SSE 格式字符串"""
+        lines = [f"event: {self.event.value}", f"data: {json.dumps(self.data, ensure_ascii=False)}", ""]
+        return "\n".join(lines) + "\n"
+
+
+def sse_event(event: SSEEventType, data: dict) -> str:
+    """快捷函数：生成 SSE 格式字符串"""
+    return SSEMessage(event=event, data=data).to_sse_format()
+
+
+def sse_content(content: str) -> str:
+    """文本内容事件"""
+    return sse_event(SSEEventType.CONTENT, {"content": content})
+
+
+def sse_thinking(content: str) -> str:
+    """思考事件"""
+    return sse_event(SSEEventType.THINKING, {"content": content})
+
+
+def sse_tool_call(tool_name: str, tool_call_id: str = None, args: dict = None) -> str:
+    """工具调用事件"""
+    return sse_event(SSEEventType.TOOL_CALL, {
+        "tool_name": tool_name,
+        "tool_call_id": tool_call_id,
+        "args": args or {}
+    })
+
+
+def sse_tool_result(tool_name: str, result: str, tool_call_id: str = None) -> str:
+    """工具结果事件"""
+    return sse_event(SSEEventType.TOOL_RESULT, {
+        "tool_name": tool_name,
+        "result": result,
+        "tool_call_id": tool_call_id
+    })
+
+
+def sse_done(content: str = "", tool_calls: list = None, thinking: str = None, usage: dict = None) -> str:
+    """完成事件"""
+    return sse_event(SSEEventType.DONE, {
+        "content": content,
+        "tool_calls": tool_calls or [],
+        "thinking": thinking,
+        "usage": usage or {}
+    })
+
+
+def sse_error(message: str, code: str = None) -> str:
+    """错误事件"""
+    return sse_event(SSEEventType.ERROR, {
+        "message": message,
+        "code": code
+    })
 
 # Add project root and src to path for imports
 ROOT = Path(__file__).resolve().parents[3]
@@ -76,41 +156,7 @@ def setup_tools():
     """Register demo tools."""
     register_calculator(registry)
     register_file_ops(registry)
-
-    def echo_handler(args: dict) -> str:
-        return tool_result({"echoed": args.get("message", ""), "original": True})
-
-    registry.register(
-        name="echo",
-        schema={
-            "name": "echo",
-            "description": "Echo back a message with metadata",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "message": {"type": "string", "description": "Message to echo back"},
-                },
-                "required": ["message"],
-            },
-        },
-        handler=echo_handler,
-    )
-
-    def time_handler(args: dict) -> str:
-        from datetime import datetime
-        return tool_result({"current_time": datetime.now().isoformat()})
-
-    registry.register(
-        name="get_time",
-        schema={
-            "name": "get_time",
-            "description": "Get the current time",
-            "parameters": {"type": "object", "properties": {}},
-        },
-        handler=time_handler,
-    )
-
-
+    
 setup_tools()
 
 
@@ -151,11 +197,26 @@ async def root():
 
 @app.post("/api/chat")
 async def chat_post(req: ChatRequest):
-    """POST endpoint with optional streaming."""
+    """POST endpoint with SSE streaming support.
+
+    SSE event types:
+    - thinking: AI 思考过程 (当 thinking=true 时)
+    - tool_call: 工具调用开始
+    - tool_result: 工具调用结果
+    - content: 普通文本内容
+    - done: 完成信号 (包含最终内容和统计)
+    - error: 错误信息
+    """
     logger.info(f"[POST /api/chat] message={req.message[:50]!r}... stream={req.stream} thinking={req.thinking}")
     session = session_manager.get_session("default")
     if not session:
         logger.warning("[POST /api/chat] No session available")
+        if req.stream:
+            return StreamingResponse(
+                iter([sse_error("No session available", "SESSION_NOT_FOUND")]),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache"}
+            )
         return ChatResponse(response="No session available")
 
     agent = session["agent"]
@@ -164,49 +225,56 @@ async def chat_post(req: ChatRequest):
         async def stream_generator():
             thinking_content = ""
             tool_calls = []
-
-            # Send thinking indicator if enabled
-            if req.thinking:
-                yield "🔍 思考中...\n\n"
+            full_content = ""
 
             try:
-                # Use agent's run_stream to properly handle tool calls and thinking
                 async for chunk in agent.run_stream(req.message):
+                    logger.info(f"[POST /api/chat] Stream chunk: {chunk}")
                     if isinstance(chunk, dict):
-                        # Handle structured chunks
                         chunk_type = chunk.get("type")
                         if chunk_type == "thinking":
-                            # Only send thinking content if thinking is enabled
                             if req.thinking:
                                 thinking_text = chunk.get("content", "")
                                 if thinking_text:
                                     thinking_content = thinking_text
-                                    # Send truncated preview
-                                    preview = thinking_text[:200] + ("..." if len(thinking_text) > 200 else "")
-                                    yield f"💭 {preview}\n\n"
-                        elif chunk_type == "tool_use":
+                                    yield sse_thinking(thinking_text)
+                        elif chunk_type == "tool_call":
                             tool_name = chunk.get("tool_name")
-                            if tool_name and tool_name not in tool_calls:
-                                tool_calls.append(tool_name)
-                                yield f"🔧 调用工具: {tool_name}\n"
+                            tool_call_id = chunk.get("tool_call_id")
+                            args = chunk.get("args")
+                            if tool_name:
+                                tool_calls.append({"name": tool_name, "call_id": tool_call_id})
+                                yield sse_tool_call(tool_name, tool_call_id, args)
+                        elif chunk_type == "tool_result":
+                            tool_name = chunk.get("tool_name")
+                            result = chunk.get("result")
+                            tool_call_id = chunk.get("tool_call_id")
+                            yield sse_tool_result(tool_name, result, tool_call_id)
                         elif chunk_type == "done":
-                            # Done chunk - thinking is complete
-                            pass
+                            # Done chunk - usage stats available
+                            usage = chunk.get("usage", {})
+                            yield sse_done(
+                                content=full_content,
+                                tool_calls=tool_calls,
+                                thinking=thinking_content if req.thinking else None,
+                                usage=usage
+                            )
                     else:
                         # String content chunk
-                        yield chunk
-
-                # Send completion signal only if thinking was enabled
-                if req.thinking:
-                    yield f"\n✅ DONE:{thinking_content}\n"
+                        full_content += chunk
+                        yield sse_content(chunk)
 
             except Exception as e:
-                yield f"Error: {str(e)}"
+                logger.error(f"[POST /api/chat] Stream error: {e}")
+                yield sse_error(str(e), type(e).__name__)
 
         return StreamingResponse(
             stream_generator(),
-            media_type="text/plain",
-            headers={"Cache-Control": "no-cache"}
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no"  # 禁用 nginx 缓冲
+            }
         )
     else:
         try:
@@ -214,9 +282,11 @@ async def chat_post(req: ChatRequest):
             response = await agent.run(req.message)
             content = response.get("content", "") or ""
             tool_calls = response.get("tool_calls") or []
+            thinking = response.get("thinking")
             logger.info(f"[POST /api/chat] Response complete: {content[:50]!r}... tool_calls={len(tool_calls)}")
             return ChatResponse(
                 response=content,
+                thinking=thinking,
                 tool_calls=tool_calls
             )
         except Exception as e:
@@ -325,4 +395,4 @@ async def get_usage():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=9000)

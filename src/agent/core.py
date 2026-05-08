@@ -181,15 +181,25 @@ class Agent:
                         pass
                     elif chunk_type == "tool_use":
                         tool_name = chunk.get("tool_name")
+                        tool_args = chunk.get("args", {})
+                        tool_call_id = chunk.get("tool_call_id")
                         if tool_name:
                             print(f"[Tool Call]: {tool_name}")
-                            tool_calls_found.append(chunk)
+                            tool_calls_found.append({"name": tool_name, "args": tool_args, "call_id": tool_call_id})
+                            result = await self.registry.dispatch(tool_name, tool_args)
+                            messages.append({"role": "tool", "content": result, "name": tool_name})
+                            yield {
+                                "type": "tool_result",
+                                "tool_name": tool_name,
+                                "tool_call_id": tool_call_id,
+                                "result": result
+                            }
                     elif chunk_type == "done":
-                        # done chunk - will handle after loop
-                        pass
+                        # done chunk - end this iteration
+                        break
                 else:
                     full_content += chunk
-                yield chunk
+                    yield chunk
 
             # After streaming, execute any tool calls using non-streaming chat
             # (streaming doesn't return tool call results in the stream itself)

@@ -15,6 +15,7 @@ node_modules/
 dist/
 *.egg-info/
 res/
+test/
 
 .env
 
@@ -25,3 +26,4 @@ res/
 
 uv.lock
 CLAUDE.md
+TODO
