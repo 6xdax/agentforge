@@ -1,11 +1,14 @@
 import { memo, useState, useEffect, useRef, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { APP_CONFIG } from './appConfig'
 
 const STORAGE_KEY = 'agentforge_chats_v3'
 const PERSIST_DEBOUNCE_MS = 500
 const INITIAL_VISIBLE_MESSAGES = 80
 const MESSAGE_PAGE_SIZE = 80
+const THINKING_TYPEWRITER_DELAY_MS = APP_CONFIG.typewriter.thinkingDelayMs
+const CONTENT_TYPEWRITER_DELAY_MS = APP_CONFIG.typewriter.contentDelayMs
 
 function App() {
   const [chats, setChats] = useState({})
@@ -33,6 +36,17 @@ function App() {
     thinkingQueueRef.current = []
   }, [])
 
+  const drainThinkingQueue = useCallback(() => {
+    if (typingThinkingTimerRef.current) {
+      clearTimeout(typingThinkingTimerRef.current)
+      typingThinkingTimerRef.current = null
+    }
+    if (thinkingQueueRef.current.length === 0) return ''
+    const pending = thinkingQueueRef.current.join('')
+    thinkingQueueRef.current = []
+    return pending
+  }, [])
+
   const runThinkingTypewriter = useCallback(() => {
     if (typingThinkingTimerRef.current || thinkingQueueRef.current.length === 0) return
 
@@ -57,12 +71,12 @@ function App() {
       })
 
       if (thinkingQueueRef.current.length > 0) {
-        typingThinkingTimerRef.current = setTimeout(tick, 10)
+        typingThinkingTimerRef.current = setTimeout(tick, THINKING_TYPEWRITER_DELAY_MS)
       } else {
         typingThinkingTimerRef.current = null
       }
     }
-    typingThinkingTimerRef.current = setTimeout(tick, 10)
+    typingThinkingTimerRef.current = setTimeout(tick, THINKING_TYPEWRITER_DELAY_MS)
   }, [])
 
   const enqueueThinking = useCallback((text) => {
@@ -207,13 +221,13 @@ function App() {
 
       if (typingQueueRef.current.length > 0) {
         // 打字的速度，小则更快
-        typingTimerRef.current = setTimeout(tick, 18)
+        typingTimerRef.current = setTimeout(tick, CONTENT_TYPEWRITER_DELAY_MS)
       } else {
         typingTimerRef.current = null
       }
     }
     // 打字的速度，小则更快
-    typingTimerRef.current = setTimeout(tick, 18)
+    typingTimerRef.current = setTimeout(tick, CONTENT_TYPEWRITER_DELAY_MS)
   }, [schedulePersistChats])
 
   const enqueueTypewriter = useCallback((text) => {
@@ -390,6 +404,11 @@ function App() {
                   continue
                 }
 
+                if (currentEvent === 'thinking') {
+                  enqueueThinking(json.content)
+                  continue
+                }
+
                 if (currentEvent === 'error') {
                   stopTypewriter()
                 }
@@ -403,10 +422,6 @@ function App() {
                   let persistNeeded = false
 
                   switch (currentEvent) {
-                    case 'thinking':
-                      enqueueThinking(json.content)
-                      updated = true
-                      break
                     case 'tool_call':
                       if (json.tool_name && !lastMsg.tool_calls.includes(json.tool_name)) {
                         lastMsg.tool_calls = [...lastMsg.tool_calls, json.tool_name]
@@ -426,7 +441,12 @@ function App() {
                       persistNeeded = true
                       break
                     case 'done':
-                      stopThinkingTypewriter()
+                      {
+                        const pendingThinking = drainThinkingQueue()
+                        if (pendingThinking) {
+                          lastMsg.thinking = (lastMsg.thinking || '') + pendingThinking
+                        }
+                      }
                       lastMsg.thinkingCompleted = true
                       if (json.usage) {
                         lastMsg.usage = json.usage
@@ -511,6 +531,7 @@ function App() {
     updateChatTitle,
     stopTypewriter,
     stopThinkingTypewriter,
+    drainThinkingQueue,
     enqueueTypewriter,
     flushPersistChats
   ])

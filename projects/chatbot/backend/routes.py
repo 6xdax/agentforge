@@ -34,6 +34,7 @@ async def root():
 
 @router.post("/api/chat")
 async def chat_post(req: ChatRequest):
+    logger.info(f"[POST /api/chat] Input: {req}")
     session = session_manager.get_session("default")
     if not session:
         logger.warning("[POST /api/chat] No session available")
@@ -55,35 +56,37 @@ async def chat_post(req: ChatRequest):
 
             try:
                 async for chunk in agent.run_stream(req.message, ThinkingLevel.ADAPTIVE if req.thinking else ThinkingLevel.OFF):
+                    logger.info(f"[POST /api/chat] Stream chunk: {chunk if isinstance(chunk, str) else json.dumps(chunk, ensure_ascii=False)}")
                     chunk_type = chunk.get("type")
                     if chunk_type == "thinking":
                         if req.thinking:
                             thinking_text = chunk.get("content", "")
                             if thinking_text:
                                 thinking_content = thinking_text
-                                yield f"event: thinking\ndata: {json.dumps({'content': thinking_text})}\n\n"
+                                yield f"event: thinking\ndata: {json.dumps({'content': thinking_text}, ensure_ascii=False)}\n\n"
                     elif chunk_type == "text":
                         text = chunk.get("content", "")
                         full_content += text
-                        yield f"event: content\ndata: {json.dumps({'content': text})}\n\n"
+                        yield f"event: content\ndata: {json.dumps({'content': text}, ensure_ascii=False)}\n\n"
                     elif chunk_type == "tool_use":
                         tool_name = chunk.get("tool_name")
                         tool_call_id = chunk.get("tool_call_id")
                         args = chunk.get("arguments", {})
                         if tool_name:
                             tool_calls.append({"name": tool_name, "call_id": tool_call_id})
-                            yield f"event: tool_call\ndata: {json.dumps({'tool_name': tool_name, 'tool_call_id': tool_call_id, 'args': args})}\n\n"
+                            yield f"event: tool_call\ndata: {json.dumps({'tool_name': tool_name, 'tool_call_id': tool_call_id, 'args': args}, ensure_ascii=False)}\n\n"
                     elif chunk_type == "tool_result":
                         tool_name = chunk.get("tool_name")
                         result = chunk.get("result")
                         tool_call_id = chunk.get("tool_call_id")
-                        yield f"event: tool_result\ndata: {json.dumps({'tool_name': tool_name, 'result': result, 'tool_call_id': tool_call_id})}\n\n"
+                        yield f"event: tool_result\ndata: {json.dumps({'tool_name': tool_name, 'result': result, 'tool_call_id': tool_call_id}, ensure_ascii=False)}\n\n"
                     elif chunk_type == "done":
-                        yield f"event: done\ndata: {json.dumps({'content': full_content, 'tool_calls': tool_calls, 'thinking': thinking_content if req.thinking else None, 'usage': {'input_tokens': chunk.get('input_tokens'), 'output_tokens': chunk.get('output_tokens'), 'cache_write_tokens': chunk.get('cache_write_tokens'), 'cache_read_tokens': chunk.get('cache_read_tokens')}})}\n\n"
+                        logger.info(f"[POST /api/chat] Output: {full_content}")
+                        yield f"event: done\ndata: {json.dumps({'content': full_content, 'tool_calls': tool_calls, 'thinking': thinking_content if req.thinking else None, 'usage': {'input_tokens': chunk.get('input_tokens'), 'output_tokens': chunk.get('output_tokens'), 'cache_write_tokens': chunk.get('cache_write_tokens'), 'cache_read_tokens': chunk.get('cache_read_tokens')}}, ensure_ascii=False)}\n\n"
 
             except Exception as e:
                 logger.error(f"[POST /api/chat] Stream error: {e}")
-                yield f"event: error\ndata: {json.dumps({'message': str(e), 'code': type(e).__name__})}\n\n"
+                yield f"event: error\ndata: {json.dumps({'message': str(e), 'code': type(e).__name__}, ensure_ascii=False)}\n\n"
             finally:
                 await session_manager.add_to_history("default", "user", req.message)
                 await session_manager.add_to_history("default", "assistant", full_content)
@@ -102,6 +105,7 @@ async def chat_post(req: ChatRequest):
             content = response.get("content", "") or ""
             tool_calls = response.get("tool_calls") or []
             thinking = response.get("thinking")
+            logger.info(f"[POST /api/chat] Output: {content}")
             result = {"response": content, "thinking": thinking, "tool_calls": tool_calls}
         except Exception as e:
             logger.error(f"[POST /api/chat] Error: {e}")
