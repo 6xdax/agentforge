@@ -108,18 +108,19 @@ async def test_tool_streaming() -> None:
 
     chunks = []
     tool_calls_seen = []
-    async for chunk in agent.run_stream("Calculate 15 * 23"):
+    async for chunk in agent.run_stream("分开两次调用工具计算 431*131 再乘2"):
+        print(f"chunk: {chunk}")
         chunks.append(chunk)
         if isinstance(chunk, dict):
             if chunk.get("type") == "tool_use":
                 tool_calls_seen.append(chunk.get("tool_name"))
-                print(f"\n[Tool Call]: {chunk}", flush=True)
-            elif chunk.get("type") == "thinking":
-                print(f"\n[Thinking]: {chunk.get('content', '')}", flush=True)
-            elif chunk.get("type") == "done":
-                print(f"\n[Done]: {chunk}", flush=True)
-        else:
-            print(f"{chunk}", end="", flush=True)
+        #         print(f"\n[Tool Call]: {chunk}", flush=True)
+        #     elif chunk.get("type") == "thinking":
+        #         print(f"\n[Thinking]: {chunk.get('content', '')}", flush=True)
+        #     elif chunk.get("type") == "done":
+        #         print(f"\n[Done]: {chunk}", flush=True)
+        # else:
+        #     print(f"{chunk}", end="", flush=True)
     print()
 
     full_response = "".join(c for c in chunks if isinstance(c, str))

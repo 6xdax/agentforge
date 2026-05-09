@@ -160,29 +160,6 @@ class Agent:
                 )
 
         for _ in range(self.max_iterations):
-            # Check if provider supports streaming
-            if not hasattr(self.provider, 'chat_stream'):
-                # Fall back to non-streaming
-                response: LLMResponse = await self.provider.chat(
-                    messages,
-                    tools=self.registry.get_schemas() or None,
-                    thinking=thinking_level,
-                )
-                if not response.get("tool_calls"):
-                    final_content = response.get("content", "")
-                    if self.memory:
-                        await self.memory.add({"role": "user", "content": user_message, "name": None})
-                        await self.memory.add({"role": "assistant", "content": final_content, "name": None})
-                    yield {"type": "done", "content": final_content}
-                    return
-                # Handle tool calls (simplified - collect and execute)
-                for call in response["tool_calls"]:
-                    tool_name = call["name"]
-                    tool_args = call.get("arguments", {})
-                    result = await self.registry.dispatch(tool_name, tool_args)
-                    messages.append({"role": "tool", "content": result, "name": tool_name})
-                continue
-
             # Stream the response
             full_content = ""
             tool_calls_found = []
@@ -201,15 +178,27 @@ class Agent:
                         tool_args = chunk.get("arguments", {})
                         tool_call_id = chunk.get("tool_call_id")
                         if tool_name:
-                            tool_calls_found.append({"name": tool_name, "args": tool_args, "call_id": tool_call_id})
-                            result = await self.registry.dispatch(tool_name, tool_args)
-                            messages.append({"role": "tool", "content": result, "name": tool_name})
+                            # Surface tool_use to callers before execution.
+                            yield {
+                                "type": "tool_use",
+                                "tool_call_id": tool_call_id,
+                                "tool_name": tool_name,
+                                "arguments": tool_args,
+                            }
+                            # Execute tool
+                            try:
+                                result = await self.registry.dispatch(tool_name, tool_args)
+                            except ToolNotFoundError as exc:
+                                raise exc
+
+                            messages.append({"role": "tool", "content": f"args: {tool_args} result: {result}", "name": tool_name})
                             yield {
                                 "type": "tool_result",
                                 "tool_call_id": tool_call_id,
                                 "tool_name": tool_name,
                                 "result": result,
                             }
+                            tool_calls_found.append(tool_name)
                     elif chunk_type == "done":
                         yield {
                             "type": "done",
@@ -224,23 +213,9 @@ class Agent:
                     full_content += chunk
                     yield {"type": "text", "content": chunk}
 
-            # After streaming, execute any tool calls using non-streaming chat
-            # (streaming doesn't return tool call results in the stream itself)
             if tool_calls_found:
-                # Re-run with non-streaming to get tool calls and execute them
-                response = await self.provider.chat(
-                    messages,
-                    tools=self.registry.get_schemas() or None,
-                    thinking=thinking_level,
-                )
-                if response.get("tool_calls"):
-                    for call in response["tool_calls"]:
-                        tool_name = call["name"]
-                        tool_args = call.get("arguments", {})
-                        result = await self.registry.dispatch(tool_name, tool_args)
-                        messages.append({"role": "tool", "content": result, "name": tool_name})
-                    # Continue the loop to get final response after tools
-                    continue
+                tool_calls_found = []
+                continue
 
             # No tool calls - store in memory and return
             if self.memory:

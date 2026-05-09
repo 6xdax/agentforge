@@ -10,6 +10,27 @@ const MESSAGE_PAGE_SIZE = 80
 const THINKING_TYPEWRITER_DELAY_MS = APP_CONFIG.typewriter.thinkingDelayMs
 const CONTENT_TYPEWRITER_DELAY_MS = APP_CONFIG.typewriter.contentDelayMs
 
+function normalizeToolPayload(payload) {
+  if (payload == null) return ''
+  if (typeof payload === 'string') {
+    const trimmed = payload.trim()
+    if (!trimmed) return ''
+    try {
+      return JSON.stringify(JSON.parse(trimmed), null, 2)
+    } catch {
+      return payload
+    }
+  }
+  if (typeof payload === 'object') {
+    try {
+      return JSON.stringify(payload, null, 2)
+    } catch {
+      return String(payload)
+    }
+  }
+  return String(payload)
+}
+
 function App() {
   const [chats, setChats] = useState({})
   const [currentChatId, setCurrentChatId] = useState(null)
@@ -340,6 +361,7 @@ function App() {
       thinking: '',
       timestamp: new Date().toISOString(),
       tool_calls: [],
+      tool_traces: [],
       thinkingCompleted: false
     }
 
@@ -413,6 +435,7 @@ function App() {
                   stopTypewriter()
                 }
 
+                const capturedEvent = currentEvent
                 setChats(prev => {
                   const updatedChats = { ...prev }
                   const chat = { ...updatedChats[currentChatId] }
@@ -421,22 +444,83 @@ function App() {
                   let updated = false
                   let persistNeeded = false
 
-                  switch (currentEvent) {
+                  switch (capturedEvent) {
                     case 'tool_call':
+                      if (!lastMsg.tool_calls) lastMsg.tool_calls = []
+                      if (!lastMsg.tool_traces) lastMsg.tool_traces = []
+                      const toolArguments = json.arguments ?? json.args ?? null
                       if (json.tool_name && !lastMsg.tool_calls.includes(json.tool_name)) {
                         lastMsg.tool_calls = [...lastMsg.tool_calls, json.tool_name]
+                      }
+                      {
+                        const callId = String(
+                          json.tool_call_id || `call_${Date.now()}_${lastMsg.tool_traces.length}`
+                        )
+                        const existingIndex = lastMsg.tool_traces.findIndex(item =>
+                          String(item.tool_call_id || '') === callId
+                        )
+
+                        if (existingIndex >= 0) {
+                          const nextTraces = [...lastMsg.tool_traces]
+                          const existing = nextTraces[existingIndex]
+                          nextTraces[existingIndex] = {
+                            ...existing,
+                            tool_call_id: callId,
+                            tool_name: json.tool_name || existing.tool_name || 'unknown_tool',
+                            arguments: toolArguments ?? existing.arguments ?? null,
+                            status: existing.status === 'completed' ? 'completed' : 'running'
+                          }
+                          lastMsg.tool_traces = nextTraces
+                        } else {
+                          lastMsg.tool_traces = [
+                            ...lastMsg.tool_traces,
+                            {
+                              tool_call_id: callId,
+                              tool_name: json.tool_name || 'unknown_tool',
+                              arguments: toolArguments,
+                              result: null,
+                              status: 'running'
+                            }
+                          ]
+                        }
                       }
                       updated = true
                       persistNeeded = true
                       break
                     case 'tool_result':
-                      // Store tool results for potential display
-                      if (!lastMsg.tool_results) lastMsg.tool_results = []
-                      lastMsg.tool_results.push({
-                        tool_name: json.tool_name,
-                        result: json.result,
-                        tool_call_id: json.tool_call_id
-                      })
+                      if (!lastMsg.tool_traces) lastMsg.tool_traces = []
+                      {
+                        const resultCallId = json.tool_call_id ? String(json.tool_call_id) : null
+                        let targetIndex = lastMsg.tool_traces.findIndex(item =>
+                          resultCallId && String(item.tool_call_id || '') === resultCallId
+                        )
+                        if (targetIndex < 0 && json.tool_name) {
+                          targetIndex = lastMsg.tool_traces.findIndex(item =>
+                            item.tool_name === json.tool_name && item.status !== 'completed'
+                          )
+                        }
+                        if (targetIndex >= 0) {
+                          const nextTraces = [...lastMsg.tool_traces]
+                          nextTraces[targetIndex] = {
+                            ...nextTraces[targetIndex],
+                            result: json.result,
+                            tool_name: json.tool_name || nextTraces[targetIndex].tool_name,
+                            status: 'completed'
+                          }
+                          lastMsg.tool_traces = nextTraces
+                        } else {
+                          lastMsg.tool_traces = [
+                            ...lastMsg.tool_traces,
+                            {
+                              tool_call_id: resultCallId || `result_${Date.now()}_${lastMsg.tool_traces.length}`,
+                              tool_name: json.tool_name || 'unknown_tool',
+                              arguments: null,
+                              result: json.result,
+                              status: 'completed'
+                            }
+                          ]
+                        }
+                      }
                       updated = true
                       persistNeeded = true
                       break
@@ -777,7 +861,16 @@ function MainContent({
 
 const Message = memo(function Message({ message, thinkingEnabled }) {
   const [thinkingExpanded, setThinkingExpanded] = useState(true)
+  const [expandedToolCalls, setExpandedToolCalls] = useState({})
   const isUser = message.role === 'user'
+  const toolTraces = message.tool_traces || []
+
+  const toggleToolCall = useCallback((toolCallId) => {
+    setExpandedToolCalls(prev => ({
+      ...prev,
+      [toolCallId]: !prev[toolCallId]
+    }))
+  }, [])
 
   return (
     <div className={`message ${isUser ? 'user' : 'assistant'}`}>
@@ -791,12 +884,52 @@ const Message = memo(function Message({ message, thinkingEnabled }) {
           />
         )}
 
-        {!isUser && message.tool_calls?.length > 0 && (
-          <div className="tool-use">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
-            </svg>
-            {message.tool_calls.join(', ')}
+        {!isUser && toolTraces.length > 0 && (
+          <div className="tool-call-list">
+            {toolTraces.map((trace, idx) => {
+              const toolCallId = trace.tool_call_id || `tool_call_${idx}`
+              const expanded = !!expandedToolCalls[toolCallId]
+              const isCompleted = trace.status === 'completed'
+              const argsText = normalizeToolPayload(trace.arguments)
+              const resultText = normalizeToolPayload(trace.result)
+
+              return (
+                <div key={toolCallId} className={`tool-call-card ${isCompleted ? 'completed' : 'running'}`}>
+                  <button
+                    type="button"
+                    className="tool-call-header"
+                    onClick={() => toggleToolCall(toolCallId)}
+                  >
+                    <div className="tool-call-left">
+                      {isCompleted ? (
+                        <span className="tool-status-icon done">✓</span>
+                      ) : (
+                        <span className="tool-status-icon spinner" aria-hidden="true" />
+                      )}
+                      <span className="tool-name">{trace.tool_name || 'tool'}</span>
+                      <span className={`tool-status-text ${isCompleted ? 'done' : 'running'}`}>
+                        {isCompleted ? '已完成' : '调用中...'}
+                      </span>
+                    </div>
+                    <span className="tool-call-toggle">{expanded ? '收起' : '查看详情'}</span>
+                  </button>
+
+                  {expanded && (
+                    <div className="tool-call-details">
+                      <div className="tool-detail-item">
+                        <div className="tool-detail-label">参数</div>
+                        <pre>{argsText || '无参数'}</pre>
+                      </div>
+
+                      <div className="tool-detail-item">
+                        <div className="tool-detail-label">结果</div>
+                        <pre>{resultText || (isCompleted ? '无返回' : '等待工具执行完成...')}</pre>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
           </div>
         )}
 
@@ -844,7 +977,7 @@ function ThinkingIndicator({ thinking, completed, expanded, onToggle }) {
 
 function WelcomeScreen({ onSendMessage }) {
   const examples = [
-    { title: '快速排序', desc: 'Python 实现并解释时间复杂度', text: '用Python实现快速排序算法' },
+    { title: '工具调用', desc: '分开两次调用工具，计算 431*131 结果再乘2', text: '分开两次调用工具，计算 431*131 结果再乘2' },
     { title: '量子计算', desc: '用简单易懂的方式解释', text: '解释量子计算的基本原理' },
     { title: '科技趋势', desc: 'AI、新能源、半导体方向', text: '分析当前科技行业的发展趋势' },
     { title: '书籍推荐', desc: '不同水平阶段的经典书籍', text: '推荐几本提升编程技能的书籍' },

@@ -221,12 +221,6 @@ class MiniMaxProvider(LLMProvider):
                             current_tool_name = getattr(event.content_block, 'name', None)
                             current_tool_id = getattr(event.content_block, 'id', None)
                             current_tool_args = ""
-                            chunk: StreamChunk = {
-                                "type": "tool_use",
-                                "tool_call_id": current_tool_id,
-                                "tool_name": current_tool_name,
-                            }
-                            yield chunk
                 elif event.type == "content_block_delta":
                     if hasattr(event, 'delta'):
                         delta = event.delta
@@ -235,19 +229,28 @@ class MiniMaxProvider(LLMProvider):
                             yield {"type": "thinking", "content": delta.thinking}
                         elif hasattr(delta, 'text') and hasattr(delta, 'text'):
                             yield delta.text
+                        elif hasattr(delta, 'partial_json'):
+                            # Anthropic SDK InputJSONDelta uses .partial_json
+                            current_tool_args += delta.partial_json
                         elif hasattr(delta, 'input_json_delta'):
                             current_tool_args += delta.input_json_delta
-                            # Yield tool arguments delta as a partial chunk
-                            arg_chunk: StreamChunk = {
-                                "type": "tool_use",
-                                "arguments": {"partial": delta.input_json_delta},
-                            }
-                            yield arg_chunk
                 elif event.type == "content_block_stop":
                     if in_thinking_block:
                         in_thinking_block = False
                     elif in_tool_use_block:
                         in_tool_use_block = False
+                        # Yield complete tool_use chunk with fully parsed arguments
+                        try:
+                            import json as _json
+                            parsed_args = _json.loads(current_tool_args) if current_tool_args else {}
+                        except Exception:
+                            parsed_args = {}
+                        yield {
+                            "type": "tool_use",
+                            "tool_call_id": current_tool_id,
+                            "tool_name": current_tool_name,
+                            "arguments": parsed_args,
+                        }
 
         # After stream completes, record usage from final message
         final_message = await stream.get_final_message()
@@ -263,16 +266,18 @@ class MiniMaxProvider(LLMProvider):
                     elif block.type == "thinking":
                         final_thinking += getattr(block, 'thinking', '')
             # Yield done chunk with full response and token usage
-            done_chunk: StreamChunk = {
-                "type": "done",
-                "content": final_content,
-                "thinking": final_thinking if final_thinking else None,
-                "input_tokens": getattr(getattr(final_message, 'usage', None), 'input_tokens', None),
-                "output_tokens": getattr(getattr(final_message, 'usage', None), 'output_tokens', None),
-                "cache_write_tokens": getattr(getattr(final_message, 'usage', None), 'cache_creation_input_tokens', None),
-                "cache_read_tokens": getattr(getattr(final_message, 'usage', None), 'cache_read_tokens', None),
-            }
-            yield done_chunk
+            # Skip done when stop_reason is tool_use — core handles continuation
+            if getattr(final_message, 'stop_reason', None) != 'tool_use':
+                done_chunk: StreamChunk = {
+                    "type": "done",
+                    "content": final_content,
+                    "thinking": final_thinking if final_thinking else None,
+                    "input_tokens": getattr(getattr(final_message, 'usage', None), 'input_tokens', None),
+                    "output_tokens": getattr(getattr(final_message, 'usage', None), 'output_tokens', None),
+                    "cache_write_tokens": getattr(getattr(final_message, 'usage', None), 'cache_creation_input_tokens', None),
+                    "cache_read_tokens": getattr(getattr(final_message, 'usage', None), 'cache_read_tokens', None),
+                }
+                yield done_chunk
         else:
             # MiniMax streaming may not return usage in get_final_message
             done_chunk: StreamChunk = {"type": "done", "content": "", "input_tokens": None, "output_tokens": None, "cache_write_tokens": None, "cache_read_tokens": None}

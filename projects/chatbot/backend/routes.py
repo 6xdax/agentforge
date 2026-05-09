@@ -74,7 +74,7 @@ async def chat_post(req: ChatRequest):
                         args = chunk.get("arguments", {})
                         if tool_name:
                             tool_calls.append({"name": tool_name, "call_id": tool_call_id})
-                            yield f"event: tool_call\ndata: {json.dumps({'tool_name': tool_name, 'tool_call_id': tool_call_id, 'args': args}, ensure_ascii=False)}\n\n"
+                            yield f"event: tool_call\ndata: {json.dumps({'tool_name': tool_name, 'tool_call_id': tool_call_id, 'arguments': args}, ensure_ascii=False)}\n\n"
                     elif chunk_type == "tool_result":
                         tool_name = chunk.get("tool_name")
                         result = chunk.get("result")
