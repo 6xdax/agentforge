@@ -4,6 +4,8 @@ import remarkGfm from 'remark-gfm'
 import { APP_CONFIG } from './appConfig'
 
 const STORAGE_KEY = 'agentforge_chats_v3'
+const AUTH_TOKEN_KEY = 'agentforge_auth_token'
+const AUTH_USER_KEY = 'agentforge_auth_user'
 const PERSIST_DEBOUNCE_MS = 500
 const INITIAL_VISIBLE_MESSAGES = 80
 const MESSAGE_PAGE_SIZE = 80
@@ -31,6 +33,130 @@ function normalizeToolPayload(payload) {
   return String(payload)
 }
 
+function getApiBase() {
+  const baseUrl = import.meta.env.BASE_URL || '/'
+  return baseUrl.replace(/\/$/, '')
+}
+
+async function apiLogin(username, password) {
+  const res = await fetch(`${getApiBase()}/api/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password })
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Login failed' }))
+    throw new Error(err.detail || 'Login failed')
+  }
+  return res.json()
+}
+
+async function apiRegister(username, password) {
+  const res = await fetch(`${getApiBase()}/api/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password })
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Register failed' }))
+    throw new Error(err.detail || 'Register failed')
+  }
+  return res.json()
+}
+
+async function apiDeleteSession(token, chatId) {
+  const res = await fetch(`${getApiBase()}/api/session/${chatId}`, {
+    method: 'DELETE',
+    headers: { 'Authorization': `Bearer ${token}` }
+  })
+  if (!res.ok) throw new Error('Failed to delete session')
+  return res.json()
+}
+
+async function apiListSessions(token) {
+  const res = await fetch(`${getApiBase()}/api/sessions`, {
+    headers: { 'Authorization': `Bearer ${token}` }
+  })
+  if (!res.ok) throw new Error('Failed to list sessions')
+  return res.json()
+}
+
+async function apiGetHistory(token, limit = 100, chatId) {
+  const res = await fetch(`${getApiBase()}/api/history?limit=${limit}&chat_id=${encodeURIComponent(chatId)}`, {
+    headers: { 'Authorization': `Bearer ${token}` }
+  })
+  if (!res.ok) throw new Error('Failed to fetch history')
+  return res.json()
+}
+
+function parseServerTimestamp(value) {
+  if (!value) return new Date().toISOString()
+  // Handle both Unix timestamp (seconds) and ISO string
+  if (typeof value === 'number') {
+    return new Date(value * (value > 1e12 ? 1 : 1000)).toISOString()
+  }
+  if (typeof value === 'string') {
+    // Check if it's a Unix timestamp string
+    const num = Number(value)
+    if (!isNaN(num)) {
+      return new Date(num > 1e12 ? num : num * 1000).toISOString()
+    }
+    // Otherwise treat as ISO string
+    return new Date(value).toISOString()
+  }
+  return new Date().toISOString()
+}
+
+function AuthModal({ mode, onModeSwitch, onSubmit, loading, error }) {
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+
+  const handleSubmit = (e) => {
+    e.preventDefault()
+    onSubmit(username, password)
+  }
+
+  return (
+    <div className="auth-modal-overlay">
+      <div className="auth-modal">
+        <h2>{mode === 'login' ? '登录' : '注册'}</h2>
+        <form onSubmit={handleSubmit}>
+          <div className="auth-field">
+            <label>用户名</label>
+            <input
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="请输入用户名"
+              required
+            />
+          </div>
+          <div className="auth-field">
+            <label>密码</label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="请输入密码"
+              required
+            />
+          </div>
+          {error && <div className="auth-error">{error}</div>}
+          <button type="submit" className="auth-submit" disabled={loading}>
+            {loading ? '处理中...' : (mode === 'login' ? '登录' : '注册')}
+          </button>
+        </form>
+        <div className="auth-switch">
+          {mode === 'login' ? '还没有账号？' : '已有账号？'}
+          <button type="button" onClick={onModeSwitch}>
+            {mode === 'login' ? '注册' : '登录'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function App() {
   const [chats, setChats] = useState({})
   const [currentChatId, setCurrentChatId] = useState(null)
@@ -44,6 +170,14 @@ function App() {
   const hasStreamedContentRef = useRef(false)
   const persistTimerRef = useRef(null)
   const persistSnapshotRef = useRef(null)
+
+  // Auth state
+  const [authToken, setAuthToken] = useState(() => localStorage.getItem(AUTH_TOKEN_KEY))
+  const [authUser, setAuthUser] = useState(() => localStorage.getItem(AUTH_USER_KEY))
+  const [authLoading, setAuthLoading] = useState(false)
+  const [authError, setAuthError] = useState('')
+  const [showAuthModal, setShowAuthModal] = useState(false)
+  const [authMode, setAuthMode] = useState('login') // 'login' | 'register'
 
   // Thinking typewriter
   const thinkingQueueRef = useRef([])       // queue of strings to type
@@ -110,53 +244,77 @@ function App() {
   // Load chats from localStorage
   useEffect(() => {
     const stored = localStorage.getItem(STORAGE_KEY)
+    let initialChats = {}
+    let initialChatId = null
+
     if (stored) {
       try {
         const parsed = JSON.parse(stored)
         const lastActive = localStorage.getItem('lastActiveChat')
         if (lastActive && parsed[lastActive]) {
-          setChats(parsed)
-          setCurrentChatId(lastActive)
+          initialChats = parsed
+          initialChatId = lastActive
         } else {
           const firstKey = Object.keys(parsed)[0]
           if (firstKey) {
-            setChats(parsed)
-            setCurrentChatId(firstKey)
-          } else {
-            const chatId = Date.now().toString()
-            const newChat = {
-              id: chatId,
-              title: '新对话',
-              createdAt: new Date().toISOString(),
-              messages: []
-            }
-            setChats({ [chatId]: newChat })
-            setCurrentChatId(chatId)
+            initialChats = parsed
+            initialChatId = firstKey
           }
         }
-      } catch {
-        const chatId = Date.now().toString()
-        const newChat = {
-          id: chatId,
-          title: '新对话',
-          createdAt: new Date().toISOString(),
-          messages: []
-        }
-        setChats({ [chatId]: newChat })
-        setCurrentChatId(chatId)
-      }
-    } else {
+      } catch { /* ignore */ }
+    }
+
+    // Set initial chats (may be empty or from localStorage)
+    setChats(initialChats)
+    if (initialChatId) {
+      setCurrentChatId(initialChatId)
+    } else if (Object.keys(initialChats).length === 0) {
       const chatId = Date.now().toString()
-      const newChat = {
-        id: chatId,
-        title: '新对话',
-        createdAt: new Date().toISOString(),
-        messages: []
-      }
-      setChats({ [chatId]: newChat })
+      setChats({ [chatId]: { id: chatId, title: '新对话', createdAt: new Date().toISOString(), messages: [] } })
       setCurrentChatId(chatId)
     }
   }, [])
+
+  // Load session list from server when authenticated (lazy loading - history loaded on demand)
+  const historyMergedRef = useRef(false)
+  useEffect(() => {
+    if (!authToken || historyMergedRef.current) return
+    historyMergedRef.current = true
+
+    const stored = localStorage.getItem(STORAGE_KEY)
+    let localChats = {}
+    if (stored) {
+      try {
+        localChats = JSON.parse(stored)
+      } catch { /* ignore */ }
+    }
+
+    apiListSessions(authToken).then(data => {
+      if (data.sessions && data.sessions.length > 0) {
+        setChats(prev => {
+          const updated = { ...prev }
+          data.sessions.forEach(session => {
+            const chatId = session.chat_id
+            if (updated[chatId]) {
+              // Update title if we have a local chat
+              updated[chatId] = { ...updated[chatId], title: session.title }
+            } else {
+              // Create placeholder chat from server session
+              updated[chatId] = {
+                id: chatId,
+                title: session.title,
+                createdAt: new Date().toISOString(),
+                messages: []
+              }
+            }
+          })
+          return updated
+        })
+      }
+    }).catch(e => {
+      console.error('Failed to load session list:', e)
+    })
+  }, [authToken])
 
   const persistChatsNow = useCallback((newChats) => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(newChats))
@@ -286,14 +444,125 @@ function App() {
     setSidebarOpen(false)
   }, [schedulePersistChats])
 
+  // Auth handlers
+  const handleAuthLogin = useCallback(async (username, password) => {
+    setAuthError('')
+    setAuthLoading(true)
+    try {
+      const data = await apiLogin(username, password)
+      setAuthToken(data.token)
+      setAuthUser(username)
+      localStorage.setItem(AUTH_TOKEN_KEY, data.token)
+      localStorage.setItem(AUTH_USER_KEY, username)
+      setShowAuthModal(false)
+      // Load history after login
+      loadHistoryFromServer(data.token)
+    } catch (e) {
+      setAuthError(e.message)
+    } finally {
+      setAuthLoading(false)
+    }
+  }, [])
+
+  const handleAuthRegister = useCallback(async (username, password) => {
+    setAuthError('')
+    setAuthLoading(true)
+    try {
+      await apiRegister(username, password)
+      // Auto login after register
+      const data = await apiLogin(username, password)
+      setAuthToken(data.token)
+      setAuthUser(username)
+      localStorage.setItem(AUTH_TOKEN_KEY, data.token)
+      localStorage.setItem(AUTH_USER_KEY, username)
+      setShowAuthModal(false)
+    } catch (e) {
+      setAuthError(e.message)
+    } finally {
+      setAuthLoading(false)
+    }
+  }, [])
+
+  const handleLogout = useCallback(() => {
+    setAuthToken(null)
+    setAuthUser(null)
+    localStorage.removeItem(AUTH_TOKEN_KEY)
+    localStorage.removeItem(AUTH_USER_KEY)
+    // Clear all chats and start fresh
+    const chatId = Date.now().toString()
+    setChats({ [chatId]: { id: chatId, title: '新对话', createdAt: new Date().toISOString(), messages: [] } })
+    setCurrentChatId(chatId)
+    // Clear server_history from localStorage
+    const stored = localStorage.getItem(STORAGE_KEY)
+    if (stored) {
+      try {
+        const chats = JSON.parse(stored)
+        delete chats['server_history']
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(chats))
+      } catch { /* ignore */ }
+    }
+  }, [])
+
   const switchChat = useCallback((chatId) => {
     setCurrentChatId(chatId)
     localStorage.setItem('lastActiveChat', chatId)
     setSidebarOpen(false)
-  }, [])
 
-  const deleteChat = useCallback((chatId, e) => {
+    // Lazy load history for the switched chat
+    if (authToken && chatId && chatId !== 'server_history') {
+      setChats(prev => {
+        const chat = prev[chatId]
+        // Only fetch if messages are empty (not yet loaded)
+        if (chat && chat.messages.length === 0) {
+          apiGetHistory(authToken, 100, chatId).then(data => {
+            if (data.history && data.history.length > 0) {
+              setChats(currentChats => {
+                const currentChat = currentChats[chatId]
+                if (!currentChat || currentChat.messages.length > 0) return currentChats
+
+                const newMessages = data.history.map((h, idx) => ({
+                  role: h.role,
+                  content: h.content || '',
+                  thinking: h.thinking || '',
+                  thinkingCompleted: h.thinking_completed ?? !!h.thinking,
+                  tool_calls: h.tool_calls?.map(tc => tc.name) || [],
+                  tool_traces: (h.tool_calls || []).map((tc, i) => ({
+                    tool_call_id: tc.call_id || `call_${i}`,
+                    tool_name: tc.name || 'unknown_tool',
+                    arguments: tc.arguments || null,
+                    result: tc.result || null,
+                    status: tc.status || 'completed'
+                  })),
+                  usage: h.usage || null,
+                  timestamp: parseServerTimestamp(h.created_at),
+                  serverId: h.id || null // Use server ID for stable keys
+                }))
+
+                return {
+                  ...currentChats,
+                  [chatId]: { ...currentChat, messages: newMessages }
+                }
+              })
+            }
+          }).catch(e => {
+            console.error(`Failed to load history for ${chatId}:`, e)
+          })
+        }
+        return prev
+      })
+    }
+  }, [authToken])
+
+  const deleteChat = useCallback(async (chatId, e) => {
     e.stopPropagation()
+    // Call backend API to delete session
+    if (authToken && chatId !== 'server_history') {
+      try {
+        await apiDeleteSession(authToken, chatId)
+      } catch (err) {
+        console.error('Failed to delete session on server:', err)
+      }
+    }
     setChats(prev => {
       const updated = { ...prev }
       delete updated[chatId]
@@ -308,7 +577,7 @@ function App() {
         createNewChat()
       }
     }
-  }, [currentChatId, chats, schedulePersistChats, createNewChat])
+  }, [currentChatId, chats, schedulePersistChats, createNewChat, authToken])
 
   const updateChatTitle = useCallback((chatId, firstMessage) => {
     const title = firstMessage.substring(0, 30) + (firstMessage.length > 30 ? '...' : '')
@@ -324,6 +593,10 @@ function App() {
 
   const sendMessage = useCallback(async (text) => {
     if (!text.trim() || isGenerating) return
+    if (!authToken) {
+      setShowAuthModal(true)
+      return
+    }
 
     stopTypewriter()
     stopThinkingTypewriter()
@@ -381,18 +654,32 @@ function App() {
     try {
       const baseUrl = import.meta.env.BASE_URL || '/'
       const apiUrl = `${baseUrl}api/chat`
+      const body = {
+        message: text,
+        thinking: thinkingEnabled,
+        stream: true
+      }
+      // Only send chat_id if authenticated (not server_history)
+      if (authToken && currentChatId !== 'server_history') {
+        body.chat_id = currentChatId
+      }
       const response = await fetch(apiUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: text,
-          thinking: thinkingEnabled,
-          stream: true
-        }),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`
+        },
+        body: JSON.stringify(body),
         signal: abortControllerRef.current.signal
       })
 
-      if (!response.ok) throw new Error('HTTP ' + response.status)
+      if (!response.ok) {
+        if (response.status === 401) {
+          handleLogout()
+          throw new Error('登录已过期，请重新登录')
+        }
+        throw new Error('HTTP ' + response.status)
+      }
 
       if (response.body) {
         const reader = response.body.getReader()
@@ -617,7 +904,8 @@ function App() {
     stopThinkingTypewriter,
     drainThinkingQueue,
     enqueueTypewriter,
-    flushPersistChats
+    flushPersistChats,
+    authToken
   ])
 
   const stopGeneration = useCallback(() => {
@@ -636,6 +924,15 @@ function App() {
         className={`sidebar-overlay ${sidebarOpen ? 'active' : ''}`}
         onClick={() => setSidebarOpen(false)}
       />
+      {showAuthModal && (
+        <AuthModal
+          mode={authMode}
+          onModeSwitch={() => setAuthMode(authMode === 'login' ? 'register' : 'login')}
+          onSubmit={authMode === 'login' ? handleAuthLogin : handleAuthRegister}
+          loading={authLoading}
+          error={authError}
+        />
+      )}
       <Sidebar
         chats={chats}
         currentChatId={currentChatId}
@@ -643,6 +940,10 @@ function App() {
         onDeleteChat={deleteChat}
         onNewChat={createNewChat}
         isOpen={sidebarOpen}
+        authUser={authUser}
+        onLogout={handleLogout}
+        onLoginClick={() => { setShowAuthModal(true); setAuthMode('login') }}
+        onRegisterClick={() => { setShowAuthModal(true); setAuthMode('register') }}
       />
       <MainContent
         chat={currentChat}
@@ -652,15 +953,23 @@ function App() {
         onStopGeneration={stopGeneration}
         onToggleThinking={() => setThinkingEnabled(!thinkingEnabled)}
         onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
+        isAuthenticated={!!authToken}
+        onLoginClick={() => { setShowAuthModal(true); setAuthMode('login') }}
       />
     </div>
   )
 }
 
-function Sidebar({ chats, currentChatId, onSwitchChat, onDeleteChat, onNewChat, isOpen }) {
+function Sidebar({ chats, currentChatId, onSwitchChat, onDeleteChat, onNewChat, isOpen, authUser, onLogout, onLoginClick, onRegisterClick }) {
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const sortedChats = Object.values(chats).sort((a, b) =>
     new Date(b.createdAt) - new Date(a.createdAt)
   )
+
+  const handleLogout = () => {
+    setSettingsOpen(false)
+    onLogout()
+  }
 
   return (
     <div className={`sidebar ${isOpen ? 'open' : ''}`}>
@@ -699,6 +1008,48 @@ function Sidebar({ chats, currentChatId, onSwitchChat, onDeleteChat, onNewChat, 
           </div>
         ))}
       </div>
+      <div className="sidebar-auth">
+        {authUser ? (
+          <div className="auth-user-info">
+            <span className="auth-username">{authUser}</span>
+            <button className="auth-logout-btn" onClick={onLogout}>退出</button>
+          </div>
+        ) : (
+          <div className="auth-buttons">
+            <button className="auth-login-btn" onClick={onLoginClick}>登录</button>
+            <button className="auth-register-btn" onClick={onRegisterClick}>注册</button>
+          </div>
+        )}
+      </div>
+      {authUser && (
+        <div className="sidebar-user-badge">
+          {settingsOpen && (
+            <div className="settings-dropdown">
+              <button className="settings-dropdown-item danger" onClick={handleLogout}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                  <polyline points="16 17 21 12 16 7" />
+                  <line x1="21" y1="12" x2="9" y2="12" />
+                </svg>
+                退出登录
+              </button>
+            </div>
+          )}
+          <div className="user-badge-avatar">
+            {authUser.charAt(0).toUpperCase()}
+          </div>
+          <div className="user-badge-info">
+            <span className="user-badge-name">{authUser}</span>
+            <span className="user-badge-status">已登录</span>
+          </div>
+          <button className="user-badge-settings" onClick={() => setSettingsOpen(!settingsOpen)}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
+            </svg>
+          </button>
+        </div>
+      )}
     </div>
   )
 }
@@ -710,7 +1061,9 @@ function MainContent({
   onSendMessage,
   onStopGeneration,
   onToggleThinking,
-  onToggleSidebar
+  onToggleSidebar,
+  isAuthenticated,
+  onLoginClick
 }) {
   const [inputValue, setInputValue] = useState('')
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_MESSAGES)
@@ -764,17 +1117,7 @@ function MainContent({
           </button>
           <span className="header-title">{currentChatTitle}</span>
         </div>
-        <div className="header-actions">
-          {isGenerating && (
-            <button className="header-btn" onClick={onStopGeneration}>
-              <svg viewBox="0 0 24 24" fill="currentColor">
-                <rect x="6" y="6" width="12" height="12" rx="2" />
-              </svg>
-              停止
-            </button>
-          )}
-        </div>
-      </header>
+        </header>
 
       <div className="messages-container">
         {messages.length === 0 ? (
@@ -794,7 +1137,7 @@ function MainContent({
             )}
             {visibleMessages.map((msg, idx) => (
               <Message
-                key={msg.timestamp || `${msg.role}-${idx}`}
+                key={msg.serverId || msg.timestamp || `${msg.role}-${idx}`}
                 message={msg}
                 thinkingEnabled={thinkingEnabled}
               />
@@ -813,20 +1156,32 @@ function MainContent({
               onChange={(e) => setInputValue(e.target.value)}
               onKeyDown={handleKeyDown}
               onInput={autoResize}
-              placeholder="输入消息..."
+              placeholder={isAuthenticated ? "输入消息..." : "请先登录后发送消息"}
               rows={1}
               disabled={isGenerating}
             />
-            <button
-              type="submit"
-              className="send-btn"
-              disabled={isGenerating || !inputValue.trim()}
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <line x1="12" y1="19" x2="12" y2="5" />
-                <polyline points="5 12 12 5 19 12" />
-              </svg>
-            </button>
+            {isGenerating ? (
+              <button
+                type="button"
+                className="stop-btn"
+                onClick={onStopGeneration}
+              >
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                  <rect x="6" y="6" width="12" height="12" rx="2" />
+                </svg>
+              </button>
+            ) : (
+              <button
+                type="submit"
+                className="send-btn"
+                disabled={isGenerating || !inputValue.trim()}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <line x1="12" y1="19" x2="12" y2="5" />
+                  <polyline points="5 12 12 5 19 12" />
+                </svg>
+              </button>
+            )}
           </div>
           <div className="input-toolbar">
             <div className="toolbar-left">

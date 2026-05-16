@@ -1,7 +1,42 @@
 from pydantic import BaseModel
+from typing import Optional, List, Literal
 
 
 class ChatRequest(BaseModel):
+    chat_id: str
     message: str
     thinking: bool = False
     stream: bool = True
+
+
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class LoginResponse(BaseModel):
+    token: str
+
+
+class ToolCall(BaseModel):
+    """Tool call record for history"""
+    call_id: str
+    name: str
+    arguments: Optional[dict] = None
+    result: Optional[str] = None
+    status: Literal["running", "completed", "error"] = "completed"
+
+
+class HistoryMessage(BaseModel):
+    """Structured history message for frontend display"""
+    role: Literal["user", "assistant"]
+    content: str
+    thinking: Optional[str] = None
+    thinking_completed: bool = False
+    tool_calls: Optional[List[ToolCall]] = None
+    usage: Optional[dict] = None

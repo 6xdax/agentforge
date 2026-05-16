@@ -140,10 +140,10 @@ class SQLiteMemory:
         """Get recent messages as a list."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.execute(
-            "SELECT role, content, name FROM messages WHERE session_id = ? ORDER BY created_at DESC LIMIT ?",
+            "SELECT role, content, name, created_at FROM messages WHERE session_id = ? ORDER BY created_at DESC LIMIT ?",
             (self.session_id, limit),
         )
         rows = cursor.fetchall()
         conn.close()
 
-        return [{"role": r, "content": c, "name": n} for r, c, n in reversed(rows)]
+        return [{"role": r, "content": c, "name": n, "created_at": t} for r, c, n, t in reversed(rows)]
