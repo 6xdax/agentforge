@@ -33,4 +33,4 @@ exclude = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/agent"]
+packages = ["src/agent", "src/scripts", "src/tools", "src/memory", "src/providers", "src/skills"]

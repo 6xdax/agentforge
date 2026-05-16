@@ -4,22 +4,15 @@ from pathlib import Path
 from agent import Agent, ToolRegistry
 from agent.types import ThinkingLevel
 from providers.minimax import MiniMaxProvider
-from tools.calculator import register as register_calculator
-from tools.file_ops import register as register_file_ops
+from tools import load_all_tools
 
 from session import session_manager
 
 logger = logging.getLogger("chatbot")
 
 registry = ToolRegistry()
-
-
-def setup_tools():
-    register_calculator(registry)
-    register_file_ops(registry)
-
-
-setup_tools()
+load_all_tools(registry)
+logger.info("Loaded %d tools into registry", len(registry.get_schemas()))
 
 
 def create_agent(thinking: bool = False) -> Agent:

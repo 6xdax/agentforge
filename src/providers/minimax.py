@@ -22,34 +22,70 @@ _THINKING_BUDGETS = {
 
 
 def _convert_messages(messages: list[dict]) -> list[dict]:
-    """Convert messages to Anthropic format."""
+    """Convert messages to Anthropic format with prompt caching.
+
+    Cache strategy:
+    - system messages: always cached (stable context)
+    - last human turn: cached to reuse KV across tool-loop iterations
+    """
     anthropic_messages = []
-    for msg in messages:
-        if msg["role"] == "system":
-            anthropic_messages.append({"role": "user", "content": f"System: {msg['content']}"})
-        elif msg["role"] == "tool":
+    # Separate system messages and conversation messages
+    system_msgs = [m for m in messages if m["role"] == "system"]
+    conv_msgs = [m for m in messages if m["role"] != "system"]
+
+    # Inject system messages as the first user turn with cache_control
+    for i, msg in enumerate(system_msgs):
+        is_last_system = (i == len(system_msgs) - 1)
+        content_block = {"type": "text", "text": msg["content"]}
+        if is_last_system:
+            content_block["cache_control"] = {"type": "ephemeral"}
+        anthropic_messages.append({"role": "user", "content": [content_block]})
+
+    # Find index of last user/human message in conv_msgs for cache marking
+    last_human_idx = -1
+    for i, msg in enumerate(conv_msgs):
+        if msg["role"] == "user":
+            last_human_idx = i
+
+    for i, msg in enumerate(conv_msgs):
+        is_last_human = (msg["role"] == "user" and i == last_human_idx)
+        if msg["role"] == "tool":
             anthropic_messages.append({
                 "role": "user",
                 "content": f"Tool result: {msg['content']}"
             })
         else:
-            anthropic_messages.append({
-                "role": msg["role"],
-                "content": msg["content"],
-            })
+            text = msg["content"] or ""
+            if is_last_human:
+                anthropic_messages.append({
+                    "role": msg["role"],
+                    "content": [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}],
+                })
+            else:
+                anthropic_messages.append({
+                    "role": msg["role"],
+                    "content": text,
+                })
     return anthropic_messages
 
 
 def _convert_tools(tools: list[dict]) -> list[dict]:
-    """Convert OpenAI-format tools to Anthropic format."""
+    """Convert OpenAI-format tools to Anthropic format.
+
+    Marks the last tool with cache_control so Anthropic caches the entire
+    tool list prefix (all tools before it are cached automatically).
+    """
     anthropic_tools = []
-    for tool in tools:
+    for i, tool in enumerate(tools):
         func = tool.get("function", tool)
-        anthropic_tools.append({
+        entry = {
             "name": func.get("name"),
             "description": func.get("description"),
             "input_schema": func.get("parameters", {}),
-        })
+        }
+        if i == len(tools) - 1:
+            entry["cache_control"] = {"type": "ephemeral"}
+        anthropic_tools.append(entry)
     return anthropic_tools
 
 

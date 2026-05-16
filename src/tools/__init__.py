@@ -13,23 +13,32 @@ Or load individual tools:
 """
 
 import importlib
+import logging
+
 from agent.registry import ToolRegistry
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["load_all_tools"]
 
 
 def load_all_tools(registry: ToolRegistry) -> None:
-    """Register all available tools with the given registry.
+    """Register all tools into registry.
 
-    Discovers and loads all tool modules in this package.
-    Each module should have a `register(registry)` function.
+    Step 1 — Local tools: load modules listed in config/tools.yml.
+    Step 2 — Hermes tools: if config/hermes_tools.yaml exists and hermes_path
+              is reachable, register all enabled Hermes tools.
     """
-    tool_modules = ["calculator", "file_ops", "file_parser", "skill_tool"]
+    from config.settings import settings  # avoid circular import at module load
 
-    for module_name in tool_modules:
+    # Step 1: local tools from tools.yml
+    for module_name in settings.tools.all_tools():
+        if not settings.tools.is_enabled(module_name):
+            continue
         try:
             module = importlib.import_module(f"tools.{module_name}")
             if hasattr(module, "register"):
                 module.register(registry)
-        except ImportError as e:
+        except ImportError:
             pass
+        

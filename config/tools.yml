@@ -1,0 +1,20 @@
+# Tool Enable/Disable Configuration
+# Set enabled: false to disable a tool globally.
+# Override per-tool via env: AGENTFORGE_TOOL_<NAME>_ENABLED=false
+
+tools:
+  calculator:
+    enabled: true
+    description: "Basic math expression evaluator"
+
+  file_ops:
+    enabled: true
+    description: "Read and write local files"
+
+  file_parser:
+    enabled: true
+    description: "Parse structured file content (JSON, YAML, CSV, etc.)"
+
+  skill_tool:
+    enabled: true
+    description: "Execute pre-defined skill scripts"

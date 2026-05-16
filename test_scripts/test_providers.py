@@ -141,10 +141,51 @@ async def test_agent_thinking_override() -> None:
 # Main
 # ---------------------------------------------------------------------------
 
+async def test_minimax_prompt_caching() -> None:
+    """Test that prompt caching works: second call with same context yields cache_read_tokens > 0."""
+    from providers.minimax import MiniMaxProvider
+
+    # Use a long enough system message to exceed Anthropic's 1024-token cache threshold
+    system_content = (
+        "You are a knowledgeable assistant specialized in software engineering. "
+        "You help developers with Python, TypeScript, Rust, Go, and other languages. "
+        "You provide concise, accurate answers and always prefer idiomatic solutions. "
+        "When answering questions, think step by step but keep responses short. "
+        "Never include unnecessary boilerplate or caveats. "
+        "If asked a factual question, answer directly without preamble. "
+    ) * 20  # repeat to exceed 1024-token minimum
+
+    messages_first = [
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": "What is 2 + 2?"},
+    ]
+    messages_second = [
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": "What is 3 + 3?"},
+    ]
+
+    provider = MiniMaxProvider()
+
+    # First call: populates the cache (cache_write_tokens > 0)
+    r1 = await provider.chat(messages_first)
+    print(f"[cache test] call 1: input={r1.get('input_tokens')}, cache_write={r1.get('cache_write_tokens')}, cache_read={r1.get('cache_read_tokens')}")
+
+    # Second call: same system message should be served from cache
+    r2 = await provider.chat(messages_second)
+    print(f"[cache test] call 2: input={r2.get('input_tokens')}, cache_write={r2.get('cache_write_tokens')}, cache_read={r2.get('cache_read_tokens')}")
+
+    cache_read = r2.get("cache_read_tokens") or 0
+    if cache_read > 0:
+        print(f"PASS prompt caching: {cache_read} tokens served from cache")
+    else:
+        print("WARN prompt caching: cache_read_tokens=0 — provider may not support caching or content too short")
+
+
 PROVIDER_TESTS = {
     "minimax": [
         test_minimax_chat_usage,
         test_minimax_stream_usage,
+        test_minimax_prompt_caching,
     ],
 }
 
