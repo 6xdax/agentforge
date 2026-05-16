@@ -1,0 +1,84 @@
+.thinking-indicator {
+  border: 1px dashed #bfdbfe;
+  background: #eff6ff;
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  cursor: pointer;
+}
+
+.thinking-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.thinking-dots {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.thinking-dots span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--brand);
+  animation: thinking-pulse 1.2s infinite;
+}
+
+.thinking-dots span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.thinking-dots span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes thinking-pulse {
+  0%,
+  70%,
+  100% {
+    transform: scale(0.8);
+    opacity: 0.35;
+  }
+
+  35% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.thinking-status {
+  font-size: 12px;
+  color: #1d4ed8;
+}
+
+.thinking-completed .thinking-status {
+  color: var(--success);
+}
+
+.thinking-toggle {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.thinking-content {
+  margin-top: 0;
+  max-height: 0;
+  overflow: hidden;
+  padding: 0 10px;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+  background: rgba(255, 255, 255, 0.6);
+  font-family: "JetBrains Mono", "Fira Code", "Cascadia Mono", monospace;
+  transition: max-height 0.28s ease, margin 0.28s ease, padding 0.28s ease;
+}
+
+.thinking-content.expanded {
+  max-height: 320px;
+  margin-top: 8px;
+  padding: 10px;
+}
