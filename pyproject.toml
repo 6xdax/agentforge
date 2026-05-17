@@ -5,6 +5,8 @@ description = "AgentForge core runtime for pluggable agents"
 requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.97.0",
+    "aiosqlite>=0.20.0",
+    "alembic>=1.13.0",
     "python-dotenv>=1.2.2",
     "pydantic-settings>=2.0.0",
     "pyyaml>=6.0.3",
@@ -16,6 +18,7 @@ dependencies = [
     "onnxruntime>=1.26.0",
     "rapidocr>=3.8.1",
     "PyJWT>=2.8.0",
+    "sqlalchemy>=2.0.0",
 ]
 
 [project.optional-dependencies]

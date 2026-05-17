@@ -111,7 +111,7 @@ async def chat_post(req: ChatRequest, user_id: str = Security(verify_token)):
         )
     session = session_manager.get_session(session_key)
     if not session:
-        session_manager.create_session(session_key)
+        await session_manager.create_session(session_key)
         session = session_manager.get_session(session_key)
     if not session:
         logger.warning("[POST /api/chat] No session available")
@@ -238,7 +238,7 @@ async def chat_post(req: ChatRequest, user_id: str = Security(verify_token)):
 @router.delete("/api/session/{chat_id}")
 async def delete_session(chat_id: str, user_id: str = Security(verify_token)):
     session_id = f"{user_id}:{chat_id}"
-    success = session_manager.delete_session(session_id)
+    success = await session_manager.delete_session(session_id)
     return {"success": success}
 
 

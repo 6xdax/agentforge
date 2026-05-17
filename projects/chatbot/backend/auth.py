@@ -1,4 +1,3 @@
-import sqlite3
 import time
 import os
 import uuid
@@ -9,81 +8,67 @@ from datetime import datetime, timedelta, timezone
 import jwt
 from fastapi import APIRouter, HTTPException, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from sqlalchemy import select
 
 from dotenv import load_dotenv
 load_dotenv()
 
-DB_PATH = "db/users.db"
+from db.database import create_sessionmaker_for, init_database
+from db.models import User
+
+DB_PATH = "db/data/app.db"
 _APP_KEY = os.getenv("APP_KEY", "dev-secret-change-me")
-bearer_scheme = HTTPBearer()
+bearer_scheme = HTTPBearer(auto_error=False)
 
 
-def _init_db():
-    db_dir = os.path.dirname(DB_PATH)
-    if db_dir and not os.path.exists(db_dir):
-        os.makedirs(db_dir, exist_ok=True)
-
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS users (
-            user_id TEXT PRIMARY KEY,
-            username TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            salt TEXT NOT NULL,
-            created_at INTEGER
-        )
-    """
-    )
-    conn.commit()
-    conn.close()
+async def _init_db(database_url: str | None = None):
+    await init_database(database_url or DB_PATH)
 
 
 def _hash_password(password: str, salt: str) -> str:
     return hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
 
 
-def create_user(username: str, password: str) -> tuple[str, str] | None:
-    _init_db()
+async def create_user(username: str, password: str, database_url: str | None = None) -> tuple[str, str] | None:
+    await _init_db(database_url)
     user_id = str(uuid.uuid4())
     salt = base64.urlsafe_b64encode(hashlib.sha1(user_id.encode()).digest()).decode()[:16]
     pw = _hash_password(password, salt)
-    now = int(time.time())
-    conn = sqlite3.connect(DB_PATH)
-    try:
-        conn.execute(
-            "INSERT INTO users (user_id, username, password_hash, salt, created_at) VALUES (?, ?, ?, ?, ?)",
-            (user_id, username, pw, salt, now),
+    sessionmaker = create_sessionmaker_for(database_url or DB_PATH)
+    async with sessionmaker() as session:
+        existing = await session.scalar(select(User.user_id).where(User.username == username))
+        if existing is not None:
+            return None
+        session.add(
+            User(
+                user_id=user_id,
+                username=username,
+                password_hash=pw,
+                salt=salt,
+                created_at=int(time.time()),
+            )
         )
-        conn.commit()
+        await session.commit()
         return user_id, password
-    except sqlite3.IntegrityError:
-        return None
-    finally:
-        conn.close()
 
 
-def verify_user(username: str, password: str) -> str | None:
-    _init_db()
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.execute("SELECT user_id, password_hash, salt FROM users WHERE username = ?", (username,))
-    row = cur.fetchone()
-    conn.close()
+async def verify_user(username: str, password: str, database_url: str | None = None) -> str | None:
+    await _init_db(database_url)
+    sessionmaker = create_sessionmaker_for(database_url or DB_PATH)
+    async with sessionmaker() as session:
+        row = await session.scalar(select(User).where(User.username == username))
     if not row:
         return None
-    user_id, pw_hash, salt = row
-    if pw_hash != _hash_password(password, salt):
+    if row.password_hash != _hash_password(password, row.salt):
         return None
-    return user_id
+    return row.user_id
 
 
-def get_user_id_by_username(username: str) -> str | None:
-    _init_db()
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.execute("SELECT user_id FROM users WHERE username = ?", (username,))
-    row = cur.fetchone()
-    conn.close()
-    return row[0] if row else None
+async def get_user_id_by_username(username: str, database_url: str | None = None) -> str | None:
+    await _init_db(database_url)
+    sessionmaker = create_sessionmaker_for(database_url or DB_PATH)
+    async with sessionmaker() as session:
+        return await session.scalar(select(User.user_id).where(User.username == username))
 
 
 def generate_token(user_id: str, expires_in: int = 60 * 60 * 24) -> str:
@@ -143,7 +128,7 @@ async def register(body: dict):
     password = body.get("password")
     if not username or not password:
         raise HTTPException(status_code=400, detail="username and password required")
-    result = create_user(username, password)
+    result = await create_user(username, password)
     if not result:
         raise HTTPException(status_code=400, detail="user exists")
     user_id, _ = result
@@ -157,7 +142,7 @@ async def login(body: dict):
     password = body.get("password")
     if not username or not password:
         raise HTTPException(status_code=400, detail="username and password required")
-    user_id = verify_user(username, password)
+    user_id = await verify_user(username, password)
     if not user_id:
         raise HTTPException(status_code=401, detail="invalid credentials")
     token = generate_token(user_id)

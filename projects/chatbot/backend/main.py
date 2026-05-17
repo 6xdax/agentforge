@@ -32,7 +32,7 @@ logger = logging.getLogger("chatbot")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    session_manager.create_session("default")
+    await session_manager.create_session("default")
     logger.info("Chatbot backend started!")
     yield
     logger.info("Chatbot backend shutting down!")
