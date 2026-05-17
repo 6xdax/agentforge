@@ -2,14 +2,45 @@
 
 import json
 from pathlib import Path
+from typing import Literal
 
-from docling.document_converter import DocumentConverter
+from docling.datamodel.base_models import InputFormat
+from docling.document_converter import DocumentConverter, PdfFormatOption
 
 from agent.errors import ToolError
 
 
+def _detect_encoding(file_path: Path) -> Literal["utf-8", "gbk", "gb2312", "latin-1"]:
+    """Detect file encoding by reading BOM or first bytes."""
+    try:
+        with open(file_path, "rb") as f:
+            raw = f.read(4)
+        # BOM signatures
+        if raw.startswith(b"\xef\xbb\xbf"):
+            return "utf-8"
+        elif raw.startswith(b"\xff\xfe"):
+            return "utf-16-le"
+        elif raw.startswith(b"\xfe\xff"):
+            return "utf-16-be"
+        # Try to decode as utf-8, fallback to gbk
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                f.read(1024)
+            return "utf-8"
+        except UnicodeDecodeError:
+            return "gbk"
+    except Exception:
+        return "utf-8"
+
+
 # Initialize converter with default settings
-_converter = DocumentConverter()
+_converter = DocumentConverter(
+    format_options={
+        InputFormat.PDF: PdfFormatOption(
+            do_ocr=False,
+        )
+    }
+)
 
 
 async def parse_document(file_path: str, max_text_length: int = 100000) -> str:
@@ -36,6 +67,14 @@ async def parse_document(file_path: str, max_text_length: int = 100000) -> str:
         raise ToolError(f"Not a file: {file_path}")
 
     try:
+        suffix = path.suffix.lower()
+        if suffix in [".txt", ".log", ".md", ".json", ".csv"]:
+            encoding = _detect_encoding(path)
+            return path.read_text(
+                encoding=encoding,
+                errors="ignore"
+            )
+
         result = _converter.convert(str(path.absolute()))
         text = result.document.export_to_text()
 
@@ -93,3 +132,14 @@ def register(registry):
 register_parse_document = register
 
 __all__ = ["register", "register_parse_document", "parse_document"]
+
+if __name__ == "__main__":
+    # Example usage
+    import asyncio
+
+    async def main():
+        # text = await parse_document("/home/ubuntu/workspace/agentforge/projects/chatbot/backend/user_data/a4ad2faf-3e96-4aa9-b24f-cf7c84d641ce/1778942733054____.pdf")
+        text = await parse_document("/home/ubuntu/workspace/agentforge/projects/chatbot/backend/user_data/a4ad2faf-3e96-4aa9-b24f-cf7c84d641ce/1778943419191_NetLog.txt")
+        print(text)
+
+    asyncio.run(main())

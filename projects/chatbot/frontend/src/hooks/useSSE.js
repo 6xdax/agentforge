@@ -10,7 +10,7 @@ export function useSSE({
 }) {
   const abortControllerRef = useRef(null)
 
-  const send = useCallback(async ({ message, thinking, chatId, authToken, apiUrl }) => {
+  const send = useCallback(async ({ message, thinking, chatId, authToken, apiUrl, filePaths = [] }) => {
     abortControllerRef.current = new AbortController()
 
     const response = await fetch(apiUrl, {
@@ -19,7 +19,7 @@ export function useSSE({
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${authToken}`
       },
-      body: JSON.stringify({ message, thinking, chat_id: chatId }),
+      body: JSON.stringify({ message, thinking, chat_id: chatId, file_paths: filePaths }),
       signal: abortControllerRef.current.signal
     })
 

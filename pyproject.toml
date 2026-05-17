@@ -9,9 +9,13 @@ dependencies = [
     "pydantic-settings>=2.0.0",
     "pyyaml>=6.0.3",
     "fastapi>=0.100.0",
+    "python-multipart>=0.0.9",
     "uvicorn[standard]>=0.23.0",
     "websockets>=10.0",
     "docling>=2.92.0",
+    "onnxruntime>=1.26.0",
+    "rapidocr>=3.8.1",
+    "PyJWT>=2.8.0",
 ]
 
 [project.optional-dependencies]

@@ -1,15 +1,21 @@
 import sqlite3
 import time
-import hmac
+import os
+import uuid
 import hashlib
 import base64
-import os
-from typing import Optional
+from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, HTTPException
+import jwt
+from fastapi import APIRouter, HTTPException, Security
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+
+from dotenv import load_dotenv
+load_dotenv()
 
 DB_PATH = "db/users.db"
-_SECRET = os.environ.get("AGENTFORGE_AUTH_SECRET", "dev-secret-change-me")
+_APP_KEY = os.getenv("APP_KEY", "dev-secret-change-me")
+bearer_scheme = HTTPBearer()
 
 
 def _init_db():
@@ -37,9 +43,8 @@ def _hash_password(password: str, salt: str) -> str:
     return hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
 
 
-def create_user(username: str, password: str) -> Optional[str]:
+def create_user(username: str, password: str) -> tuple[str, str] | None:
     _init_db()
-    import uuid
     user_id = str(uuid.uuid4())
     salt = base64.urlsafe_b64encode(hashlib.sha1(user_id.encode()).digest()).decode()[:16]
     pw = _hash_password(password, salt)
@@ -51,14 +56,14 @@ def create_user(username: str, password: str) -> Optional[str]:
             (user_id, username, pw, salt, now),
         )
         conn.commit()
-        return user_id
+        return user_id, password
     except sqlite3.IntegrityError:
         return None
     finally:
         conn.close()
 
 
-def verify_user(username: str, password: str) -> Optional[str]:
+def verify_user(username: str, password: str) -> str | None:
     _init_db()
     conn = sqlite3.connect(DB_PATH)
     cur = conn.execute("SELECT user_id, password_hash, salt FROM users WHERE username = ?", (username,))
@@ -72,7 +77,7 @@ def verify_user(username: str, password: str) -> Optional[str]:
     return user_id
 
 
-def get_user_id_by_username(username: str) -> Optional[str]:
+def get_user_id_by_username(username: str) -> str | None:
     _init_db()
     conn = sqlite3.connect(DB_PATH)
     cur = conn.execute("SELECT user_id FROM users WHERE username = ?", (username,))
@@ -82,29 +87,51 @@ def get_user_id_by_username(username: str) -> Optional[str]:
 
 
 def generate_token(user_id: str, expires_in: int = 60 * 60 * 24) -> str:
-    exp = int(time.time()) + expires_in
-    payload = f"{user_id}|{exp}"
-    sig = hmac.new(_SECRET.encode(), payload.encode(), hashlib.sha256).digest()
-    token = base64.urlsafe_b64encode(payload.encode()).decode() + "." + base64.urlsafe_b64encode(sig).decode()
-    return token
+    """Generate JWT token for user."""
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(seconds=expires_in)
+    payload = {
+        "user_id": user_id,
+        "iat": int(now.timestamp()),
+        "exp": int(expire.timestamp()),
+    }
+    return jwt.encode(payload, _APP_KEY, algorithm="HS256")
 
 
-def verify_token(token: str) -> Optional[str]:
+def verify_token(
+    credentials: HTTPAuthorizationCredentials = Security(bearer_scheme)
+) -> str:
+    """FastAPI Security dependency for bearer token verification.
+
+    Usage:
+        async def endpoint(auth_payload: dict = Security(verify_token)):
+
+    Returns:
+        user_id string from verified token
+
+    Raises:
+        HTTPException 401 if missing or invalid
+    """
+    if credentials is None:
+        raise HTTPException(status_code=401, detail="Missing authorization header")
+
+    if credentials.scheme.lower() != "bearer":
+        raise HTTPException(status_code=401, detail="Invalid authorization scheme")
+
+    token = credentials.credentials
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing token value")
+
     try:
-        parts = token.split(".")
-        if len(parts) != 2:
-            return None
-        payload_b, sig_b = parts
-        payload = base64.urlsafe_b64decode(payload_b.encode()).decode()
-        expected_sig = base64.urlsafe_b64encode(hmac.new(_SECRET.encode(), payload.encode(), hashlib.sha256).digest()).decode()
-        if not hmac.compare_digest(expected_sig, sig_b):
-            return None
-        user_id, exp_s = payload.split("|")
-        if int(exp_s) < int(time.time()):
-            return None
+        payload = jwt.decode(token, _APP_KEY, algorithms=["HS256"])
+        user_id = payload.get("user_id")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token payload")
         return user_id
-    except Exception:
-        return None
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token signature")
 
 
 router = APIRouter()
@@ -116,9 +143,10 @@ async def register(body: dict):
     password = body.get("password")
     if not username or not password:
         raise HTTPException(status_code=400, detail="username and password required")
-    user_id = create_user(username, password)
-    if not user_id:
+    result = create_user(username, password)
+    if not result:
         raise HTTPException(status_code=400, detail="user exists")
+    user_id, _ = result
     token = generate_token(user_id)
     return {"token": token}
 

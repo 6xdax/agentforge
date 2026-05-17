@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List, Literal
 
 
@@ -7,6 +7,7 @@ class ChatRequest(BaseModel):
     message: str
     thinking: bool = False
     stream: bool = True
+    file_paths: List[str] = Field(default_factory=list)
 
 
 class RegisterRequest(BaseModel):

@@ -54,6 +54,25 @@ export async function apiGetHistory(token, limit = 100, chatId) {
   return res.json()
 }
 
+export async function apiUploadUserFile(token, file, maxTextLength = 12000) {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('max_text_length', String(maxTextLength))
+
+  const res = await fetch(`${getApiBase()}/api/upload`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}` },
+    body: form
+  })
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Upload failed' }))
+    throw new Error(err.detail || 'Upload failed')
+  }
+
+  return res.json()
+}
+
 export function parseServerTimestamp(value) {
   if (!value) return new Date().toISOString()
   if (typeof value === 'number') {

@@ -2,6 +2,7 @@ import { useState, useRef, useCallback } from 'react'
 import AuthModal from './components/AuthModal'
 import Sidebar from './components/Sidebar'
 import MainContent from './components/MainContent'
+import { apiUploadUserFile } from './api'
 import { useAuth } from './hooks/useAuth'
 import { useChats } from './hooks/useChats'
 import { useTypewriter } from './hooks/useTypewriter'
@@ -149,7 +150,7 @@ export default function App() {
     clearChatAndCreateNew()
   }, [logout, clearChatAndCreateNew])
 
-  const sendMessage = useCallback(async (text) => {
+  const sendMessage = useCallback(async (text, filePaths = []) => {
     if (!text.trim() || isGenerating) return
     if (!authToken) {
       openAuthModal('login')
@@ -196,7 +197,8 @@ export default function App() {
         thinking: thinkingEnabled,
         chatId: currentChatId,
         authToken,
-        apiUrl
+        apiUrl,
+        filePaths
       })
 
       schedulePersistChats(chats)
@@ -235,6 +237,21 @@ export default function App() {
     typewriter.stopAll()
   }, [abort, typewriter])
 
+  const uploadFile = useCallback(async (file) => {
+    if (!authToken) {
+      openAuthModal('login')
+      throw new Error('请先登录')
+    }
+
+    const data = await apiUploadUserFile(authToken, file)
+
+    return {
+      fileName: data.file_name,
+      savedPath: data.saved_path,
+      size: data.size
+    }
+  }, [authToken, openAuthModal])
+
   const currentChat = chats[currentChatId]
 
   return (
@@ -269,6 +286,7 @@ export default function App() {
         isGenerating={isGenerating}
         thinkingEnabled={thinkingEnabled}
         onSendMessage={sendMessage}
+        onUploadFile={uploadFile}
         onStopGeneration={stopGeneration}
         onToggleThinking={() => setThinkingEnabled(!thinkingEnabled)}
         onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}

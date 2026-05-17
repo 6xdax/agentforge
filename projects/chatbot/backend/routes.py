@@ -1,8 +1,10 @@
 import json
 import logging
+import re
+import time
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, File, HTTPException, UploadFile, Security
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -11,12 +13,14 @@ from agent.types import ThinkingLevel
 from models import ChatRequest, HistoryMessage, ToolCall
 from session import session_manager
 from auth import verify_token
+from tools.file_parser import parse_document
 
 logger = logging.getLogger("chatbot")
 
 router = APIRouter()
 
 frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
+user_data_root = Path(__file__).parent / "user_data"
 
 INDEX_HEADERS = {
     "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
@@ -32,22 +36,79 @@ async def root():
     return {"message": "Frontend not built. Run 'npm run build' in frontend directory."}
 
 
+@router.post("/api/upload")
+async def upload_file(
+    file: UploadFile = File(...),
+    user_id: str = Security(verify_token),
+):
+
+    if not file or not file.filename:
+        raise HTTPException(status_code=400, detail="No file uploaded")
+
+    original_name = Path(file.filename).name
+    safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", original_name) or "uploaded_file"
+
+    user_dir = user_data_root / user_id
+    user_dir.mkdir(parents=True, exist_ok=True)
+
+    stored_name = f"{int(time.time() * 1000)}_{safe_name}"
+    saved_path = user_dir / stored_name
+    relative_saved_path = (Path(user_id) / stored_name).as_posix()
+
+    file_bytes = await file.read()
+    if len(file_bytes) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="File too large (max 20MB)")
+
+    saved_path.write_bytes(file_bytes)
+
+    return {
+        "file_name": original_name,
+        "stored_name": stored_name,
+        "saved_path": relative_saved_path,
+        "size": len(file_bytes),
+    }
+
+
 @router.post("/api/chat")
-async def chat_post(req: ChatRequest, request: Request):
-    logger.info(f"[POST /api/chat] Input: {req}")
-    # Authenticate
-    auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
-    user_id = None
-    if auth_header and auth_header.lower().startswith("bearer "):
-        parts = auth_header.split(None, 1)
-        if len(parts) == 2:
-            token = parts[1]
-            user_id = verify_token(token)
-    if not user_id:
-        logger.warning("[POST /api/chat] Unauthorized request")
-        raise HTTPException(status_code=401, detail="Unauthorized")
+async def chat_post(req: ChatRequest, user_id: str = Security(verify_token)):
     
     session_key = f"{user_id}:{req.chat_id}"
+    user_dir = (user_data_root / user_id).resolve()
+
+    parsed_file_blocks: list[str] = []
+    for raw_path in req.file_paths or []:
+        try:
+            raw_candidate = Path(raw_path)
+            if raw_candidate.is_absolute():
+                candidate_resolved = raw_candidate.resolve()
+            else:
+                candidate_resolved = (user_data_root / raw_candidate).resolve()
+            if user_dir not in candidate_resolved.parents and candidate_resolved != user_dir:
+                parsed_file_blocks.append(f"[File parse skipped] {raw_candidate.name}: invalid file path")
+                continue
+            if not candidate_resolved.exists() or not candidate_resolved.is_file():
+                parsed_file_blocks.append(f"[File parse skipped] {raw_candidate.name}: file not found")
+                continue
+
+            parsed_text = await parse_document(str(candidate_resolved), max_text_length=12000)
+            parsed_file_blocks.append(
+                f"File: {candidate_resolved.name}\n"
+                f"Path: {candidate_resolved}\n"
+                "Content:\n"
+                f"{parsed_text}"
+            )
+        except Exception as exc:
+            file_name = Path(raw_path).name if raw_path else "unknown"
+            parsed_file_blocks.append(f"[File parse failed] {file_name}: {exc}")
+
+    agent_message = req.message
+    if parsed_file_blocks:
+        files_context = "\n\n".join(parsed_file_blocks)
+        agent_message = (
+            f"{req.message}\n\n"
+            "The user has uploaded file(s). Use the following extracted content as additional context:\n\n"
+            f"{files_context}"
+        )
     session = session_manager.get_session(session_key)
     if not session:
         session_manager.create_session(session_key)
@@ -71,7 +132,7 @@ async def chat_post(req: ChatRequest, request: Request):
             full_content = ""
 
             try:
-                async for chunk in agent.run_stream(req.message, ThinkingLevel.ADAPTIVE if req.thinking else ThinkingLevel.OFF):
+                async for chunk in agent.run_stream(agent_message, ThinkingLevel.ADAPTIVE if req.thinking else ThinkingLevel.OFF):
                     logger.info(f"[POST /api/chat] Stream chunk: {chunk if isinstance(chunk, str) else json.dumps(chunk, ensure_ascii=False)}")
                     chunk_type = chunk.get("type")
                     if chunk_type == "thinking":
@@ -136,7 +197,7 @@ async def chat_post(req: ChatRequest, request: Request):
         )
     else:
         try:
-            response = await agent.run(req.message, ThinkingLevel.ADAPTIVE if req.thinking else ThinkingLevel.OFF)
+            response = await agent.run(agent_message, ThinkingLevel.ADAPTIVE if req.thinking else ThinkingLevel.OFF)
             content = response.get("content", "") or ""
             tool_calls_data = response.get("tool_calls") or []
             thinking = response.get("thinking")
@@ -175,49 +236,62 @@ async def chat_post(req: ChatRequest, request: Request):
 
 
 @router.delete("/api/session/{chat_id}")
-async def delete_session(chat_id: str, request: Request):
-    auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
-    user_id = None
-    if auth_header and auth_header.lower().startswith("bearer "):
-        token = auth_header.split(None, 1)[1]
-        user_id = verify_token(token)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
+async def delete_session(chat_id: str, user_id: str = Security(verify_token)):
     session_id = f"{user_id}:{chat_id}"
     success = session_manager.delete_session(session_id)
     return {"success": success}
 
 
 @router.get("/api/sessions")
-async def list_sessions(request: Request):
-    """List all sessions for the current user."""
-    auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
-    user_id = None
-    if auth_header and auth_header.lower().startswith("bearer "):
-        token = auth_header.split(None, 1)[1]
-        user_id = verify_token(token)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
+async def list_sessions(user_id: str = Security(verify_token)):
     sessions = await session_manager.list_sessions(user_id)
     return {"sessions": sessions}
 
 
 @router.get("/api/history")
-async def get_history(request: Request, limit: int = 100, chat_id: str = ...):
-    """Get history for a specific chat session (lazy loading)."""
-    auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
-    user_id = None
-    if auth_header and auth_header.lower().startswith("bearer "):
-        token = auth_header.split(None, 1)[1]
-        user_id = verify_token(token)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
+async def get_history(limit: int = 100, chat_id: str = ..., user_id: str = Security(verify_token)):
     session_id = f"{user_id}:{chat_id}"
     history = await session_manager.get_history(session_id, limit=limit)
     return {"history": history}
+
+
+@router.get("/api/config/tools")
+async def get_tool_config(user_id: str = Security(verify_token)):
+    """Get current tool configuration."""
+    from .config import get_tool_config
+    return get_tool_config()
+
+
+@router.post("/api/config/tools")
+async def update_tool_config(req: dict, user_id: str = Security(verify_token)):
+    """Update tool configuration (enable/disable specific tools)."""
+    return {"status": "ok", "config": req}
+
+
+@router.get("/api/config/mcp")
+async def get_mcp_config(user_id: str = Security(verify_token)):
+    """Get MCP server configuration."""
+    from .config import get_mcp_config
+    return get_mcp_config()
+
+
+@router.post("/api/config/mcp")
+async def update_mcp_config(req: dict, user_id: str = Security(verify_token)):
+    """Update MCP server configuration."""
+    return {"status": "ok", "config": req}
+
+
+@router.get("/api/config/skills")
+async def get_skill_config(user_id: str = Security(verify_token)):
+    """Get skill configuration."""
+    from .config import get_skill_config
+    return get_skill_config()
+
+
+@router.post("/api/config/skills")
+async def update_skill_config(req: dict, user_id: str = Security(verify_token)):
+    """Update skill configuration."""
+    return {"status": "ok", "config": req}
 
 
 @router.get("/{full_path:path}")

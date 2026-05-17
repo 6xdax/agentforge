@@ -17,6 +17,7 @@ dist/
 *.egg-info/
 res/
 test/
+user_data/
 
 .env
 

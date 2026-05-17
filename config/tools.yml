@@ -18,3 +18,7 @@ tools:
   skill_tool:
     enabled: true
     description: "Execute pre-defined skill scripts"
+
+  web_search:
+    enabled: true
+    description: "Volcengine web search API (web/web_summary/image)"
