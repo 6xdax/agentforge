@@ -30,6 +30,11 @@ export default function App() {
     closeAuthModal
   } = useAuth()
 
+  const handleAuthExpired = useCallback(() => {
+    logout()
+    openAuthModal('login')
+  }, [logout, openAuthModal])
+
   const {
     chats,
     currentChatId,
@@ -43,7 +48,7 @@ export default function App() {
     clearChatAndCreateNew,
     schedulePersistChats,
     flushPersistChats
-  } = useChats(authToken)
+  } = useChats(authToken, handleAuthExpired)
 
   const typewriter = useTypewriter(updateLastMessageInChat, schedulePersistChats)
 
@@ -204,6 +209,10 @@ export default function App() {
       schedulePersistChats(chats)
     } catch (error) {
       if (error.name !== 'AbortError') {
+        if (error.status === 401) {
+          handleAuthExpired()
+          return
+        }
         typewriter.stopAll()
         console.error('Error:', error)
         updateLastMessageInChat(currentChatId, (lastMsg) => ({
@@ -228,6 +237,7 @@ export default function App() {
     updateLastMessageInChat,
     schedulePersistChats,
     flushPersistChats,
+    handleAuthExpired,
     openAuthModal,
     send
   ])
@@ -243,14 +253,22 @@ export default function App() {
       throw new Error('请先登录')
     }
 
-    const data = await apiUploadUserFile(authToken, file)
+    let data
+    try {
+      data = await apiUploadUserFile(authToken, file)
+    } catch (error) {
+      if (error.status === 401) {
+        handleAuthExpired()
+      }
+      throw error
+    }
 
     return {
       fileName: data.file_name,
       savedPath: data.saved_path,
       size: data.size
     }
-  }, [authToken, openAuthModal])
+  }, [authToken, openAuthModal, handleAuthExpired])
 
   const currentChat = chats[currentChatId]
 

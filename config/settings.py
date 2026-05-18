@@ -36,7 +36,7 @@ class LLMProviderSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="MINIMAX_")
 
-    api_key: str = ""
+    api_key: str = os.getenv("MINIMAX_API_KEY", "")
     base_url: str = "https://api.minimaxi.com/anthropic"
     model: str = "MiniMax-M2.7"
 

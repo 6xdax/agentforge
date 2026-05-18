@@ -29,7 +29,7 @@ function loadChatsFromStorage() {
   return { initialChats, initialChatId }
 }
 
-export function useChats(authToken) {
+export function useChats(authToken, onAuthExpired) {
   const [chats, setChats] = useState({})
   const [currentChatId, setCurrentChatId] = useState(null)
 
@@ -76,9 +76,13 @@ export function useChats(authToken) {
         })
       }
     }).catch(e => {
+      if (e?.status === 401) {
+        onAuthExpired?.()
+        return
+      }
       console.error('Failed to load session list:', e)
     })
-  }, [authToken])
+  }, [authToken, onAuthExpired])
 
   const persistChatsNow = useCallback((newChats) => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(newChats))
@@ -147,12 +151,16 @@ export function useChats(authToken) {
             })
           }
         }).catch(e => {
+          if (e?.status === 401) {
+            onAuthExpired?.()
+            return
+          }
           console.error(`Failed to load history for ${chatId}:`, e)
         })
       }
       return prev
     })
-  }, [])
+  }, [onAuthExpired])
 
   const deleteChatById = useCallback(async (chatId, token) => {
     if (token && chatId !== 'server_history') {

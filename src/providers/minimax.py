@@ -1,5 +1,6 @@
 """MiniMax provider using Anthropic SDK."""
 
+import os
 from typing import Optional, AsyncIterator, Union
 
 from anthropic import AsyncAnthropic
@@ -113,7 +114,7 @@ class MiniMaxProvider(LLMProvider):
             self.base_url = base_url or cfg.base_url
         except ImportError:
             self.model = model or "MiniMax-M2.7"
-            self.api_key = api_key or ""
+            self.api_key = api_key or os.getenv("MINIMAX_API_KEY", "")
             self.base_url = base_url or "https://api.minimaxi.com/anthropic"
 
         api_key = self.api_key.strip() if self.api_key else None

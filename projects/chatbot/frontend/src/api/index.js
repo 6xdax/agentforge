@@ -3,6 +3,19 @@ function getApiBase() {
   return baseUrl.replace(/\/$/, '')
 }
 
+class ApiError extends Error {
+  constructor(message, status) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
+async function parseErrorResponse(res, fallback) {
+  const err = await res.json().catch(() => ({ detail: fallback }))
+  return new ApiError(err.detail || fallback, res.status)
+}
+
 export async function apiLogin(username, password) {
   const res = await fetch(`${getApiBase()}/api/login`, {
     method: 'POST',
@@ -10,8 +23,7 @@ export async function apiLogin(username, password) {
     body: JSON.stringify({ username, password })
   })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: 'Login failed' }))
-    throw new Error(err.detail || 'Login failed')
+    throw await parseErrorResponse(res, 'Login failed')
   }
   return res.json()
 }
@@ -23,8 +35,7 @@ export async function apiRegister(username, password) {
     body: JSON.stringify({ username, password })
   })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: 'Register failed' }))
-    throw new Error(err.detail || 'Register failed')
+    throw await parseErrorResponse(res, 'Register failed')
   }
   return res.json()
 }
@@ -34,7 +45,7 @@ export async function apiDeleteSession(token, chatId) {
     method: 'DELETE',
     headers: { 'Authorization': `Bearer ${token}` }
   })
-  if (!res.ok) throw new Error('Failed to delete session')
+  if (!res.ok) throw await parseErrorResponse(res, 'Failed to delete session')
   return res.json()
 }
 
@@ -42,7 +53,7 @@ export async function apiListSessions(token) {
   const res = await fetch(`${getApiBase()}/api/sessions`, {
     headers: { 'Authorization': `Bearer ${token}` }
   })
-  if (!res.ok) throw new Error('Failed to list sessions')
+  if (!res.ok) throw await parseErrorResponse(res, 'Failed to list sessions')
   return res.json()
 }
 
@@ -50,7 +61,7 @@ export async function apiGetHistory(token, limit = 100, chatId) {
   const res = await fetch(`${getApiBase()}/api/history?limit=${limit}&chat_id=${encodeURIComponent(chatId)}`, {
     headers: { 'Authorization': `Bearer ${token}` }
   })
-  if (!res.ok) throw new Error('Failed to fetch history')
+  if (!res.ok) throw await parseErrorResponse(res, 'Failed to fetch history')
   return res.json()
 }
 
@@ -66,8 +77,7 @@ export async function apiUploadUserFile(token, file, maxTextLength = 12000) {
   })
 
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: 'Upload failed' }))
-    throw new Error(err.detail || 'Upload failed')
+    throw await parseErrorResponse(res, 'Upload failed')
   }
 
   return res.json()

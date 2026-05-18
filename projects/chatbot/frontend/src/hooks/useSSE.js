@@ -24,7 +24,10 @@ export function useSSE({
     })
 
     if (!response.ok) {
-      throw new Error('HTTP ' + response.status)
+      const errPayload = await response.json().catch(() => ({}))
+      const err = new Error(errPayload.detail || ('HTTP ' + response.status))
+      err.status = response.status
+      throw err
     }
 
     if (response.body) {
