@@ -10,6 +10,14 @@ from fastapi.staticfiles import StaticFiles
 
 from agent import Agent
 from agent.types import ThinkingLevel
+from user_config import (
+    get_mcp_config as load_user_mcp_config,
+    get_skill_config as load_user_skill_config,
+    get_tool_config as load_user_tool_config,
+    update_mcp_config as save_user_mcp_config,
+    update_skill_config as save_user_skill_config,
+    update_tool_config as save_user_tool_config,
+)
 from models import ChatRequest, HistoryMessage, ToolCall
 from session import session_manager
 from auth import verify_token
@@ -257,41 +265,47 @@ async def get_history(limit: int = 100, chat_id: str = ..., user_id: str = Secur
 
 @router.get("/api/config/tools")
 async def get_tool_config(user_id: str = Security(verify_token)):
-    """Get current tool configuration."""
-    from .config import get_tool_config
-    return get_tool_config()
+    return await load_user_tool_config(user_id)
 
 
 @router.post("/api/config/tools")
 async def update_tool_config(req: dict, user_id: str = Security(verify_token)):
-    """Update tool configuration (enable/disable specific tools)."""
-    return {"status": "ok", "config": req}
+    try:
+        result = await save_user_tool_config(user_id, req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    session_manager.reset_user_sessions(user_id)
+    return {"status": "ok", "config": result}
 
 
 @router.get("/api/config/mcp")
 async def get_mcp_config(user_id: str = Security(verify_token)):
-    """Get MCP server configuration."""
-    from .config import get_mcp_config
-    return get_mcp_config()
+    return await load_user_mcp_config(user_id)
 
 
 @router.post("/api/config/mcp")
 async def update_mcp_config(req: dict, user_id: str = Security(verify_token)):
-    """Update MCP server configuration."""
-    return {"status": "ok", "config": req}
+    try:
+        result = await save_user_mcp_config(user_id, req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    session_manager.reset_user_sessions(user_id)
+    return {"status": "ok", "config": result}
 
 
 @router.get("/api/config/skills")
 async def get_skill_config(user_id: str = Security(verify_token)):
-    """Get skill configuration."""
-    from .config import get_skill_config
-    return get_skill_config()
+    return await load_user_skill_config(user_id)
 
 
 @router.post("/api/config/skills")
 async def update_skill_config(req: dict, user_id: str = Security(verify_token)):
-    """Update skill configuration."""
-    return {"status": "ok", "config": req}
+    try:
+        result = await save_user_skill_config(user_id, req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    session_manager.reset_user_sessions(user_id)
+    return {"status": "ok", "config": result}
 
 
 @router.get("/{full_path:path}")

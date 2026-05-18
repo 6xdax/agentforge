@@ -11,16 +11,12 @@ from db.database import create_sessionmaker_for, get_agent_memory_db_path, init_
 from db.models import Message
 from models import HistoryMessage, ToolCall
 from providers.minimax import MiniMaxProvider
-from tools import load_all_tools
+from user_config import build_tool_registry_for_user
 
 logger = logging.getLogger("chatbot")
 
-registry = ToolRegistry()
-load_all_tools(registry)
-logger.info("Loaded %d tools into registry", len(registry.get_schemas()))
 
-
-def create_agent(thinking: bool = False, memory=None) -> Agent:
+def create_agent(thinking: bool = False, memory=None, registry: ToolRegistry | None = None) -> Agent:
     thinking_level = ThinkingLevel.ADAPTIVE if thinking else ThinkingLevel.OFF
     provider = MiniMaxProvider(thinking=thinking_level)
     return Agent(provider=provider, registry=registry, memory=memory)
@@ -45,8 +41,10 @@ class SessionManager:
 
     async def create_session(self, session_id: str):
         await self._ensure_tables()
+        user_id = session_id.split(":", 1)[0] if ":" in session_id else session_id
+        registry = await build_tool_registry_for_user(user_id)
         memory = SQLiteMemory(db_path=str(get_agent_memory_db_path()), session_id=session_id)
-        agent = create_agent(memory=memory)
+        agent = create_agent(memory=memory, registry=registry)
         self.sessions[session_id] = {"agent": agent, "memory": memory}
 
     def get_session(self, session_id: str) -> Optional[dict]:
@@ -78,6 +76,12 @@ class SessionManager:
             await session.execute(delete(Message).where(Message.session_id == session_id))
             await session.commit()
         return True
+
+    def reset_user_sessions(self, user_id: str) -> None:
+        prefix = f"{user_id}:"
+        for session_id in list(self.sessions.keys()):
+            if session_id == user_id or session_id.startswith(prefix):
+                del self.sessions[session_id]
 
     async def get_history(self, session_id: str, limit: int = 100) -> list:
         await self._ensure_tables()
