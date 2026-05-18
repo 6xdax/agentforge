@@ -51,6 +51,22 @@ app.add_middleware(
 frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
 app.mount("/chatbot/assets", StaticFiles(directory=str(frontend_dist / "assets")), name="assets")
 
+# Serve agentforge docs
+from fastapi.responses import FileResponse
+docs_dir = Path(__file__).parent.parent.parent.parent / "docs"
+
+@app.get("/agentdocs", include_in_schema=False)
+@app.get("/agentdocs/", include_in_schema=False)
+async def agentdocs_index():
+    return FileResponse(str(docs_dir / "index.html"))
+
+@app.get("/agentdocs/{path:path}", include_in_schema=False)
+async def agentdocs_static(path: str):
+    file_path = docs_dir / path
+    if file_path.exists() and file_path.is_file():
+        return FileResponse(str(file_path))
+    return FileResponse(str(docs_dir / "index.html"))
+
 app.include_router(router, prefix="/chatbot")
 
 # Mount auth endpoints

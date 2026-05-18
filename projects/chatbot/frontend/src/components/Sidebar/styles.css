@@ -67,6 +67,44 @@
   height: 16px;
 }
 
+.docs-entry-btn {
+  width: 100%;
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-soft);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-decoration: none;
+  box-sizing: border-box;
+}
+
+.docs-entry-btn:hover {
+  background: var(--bg-soft-hover);
+  border-color: #d7dfeb;
+  color: var(--text-primary);
+}
+
+.agent-framework-btn:hover {
+  background: var(--bg-soft-hover);
+  border-color: #d7dfeb;
+  color: var(--text-primary);
+}
+
+.docs-entry-btn svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
 .chat-list {
   flex: 1;
   overflow-y: auto;
