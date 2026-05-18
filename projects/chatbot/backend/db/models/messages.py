@@ -17,6 +17,7 @@ class Message(Base):
     session_id: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     role: Mapped[str] = mapped_column(String(32), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    attachments: Mapped[str | None] = mapped_column(Text, nullable=True)
     thinking: Mapped[str | None] = mapped_column(Text, nullable=True)
     tool_calls: Mapped[str | None] = mapped_column(Text, nullable=True)
     usage: Mapped[str | None] = mapped_column(Text, nullable=True)

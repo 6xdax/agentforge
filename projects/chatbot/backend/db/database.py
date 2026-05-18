@@ -3,6 +3,8 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
+from sqlalchemy import text
+
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from .base import Base
@@ -49,3 +51,7 @@ async def init_database(database_url_or_path: str | None = None) -> None:
     engine = create_async_engine_for(database_url_or_path)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        table_info = await conn.execute(text("PRAGMA table_info(messages)"))
+        columns = {row[1] for row in table_info.fetchall()}
+        if "attachments" not in columns:
+            await conn.execute(text("ALTER TABLE messages ADD COLUMN attachments TEXT"))

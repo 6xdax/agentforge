@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 import jwt
 from fastapi import APIRouter, HTTPException, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from pydantic import BaseModel
 from sqlalchemy import select
 
 from dotenv import load_dotenv
@@ -122,10 +123,15 @@ def verify_token(
 router = APIRouter()
 
 
+class AuthRequest(BaseModel):
+    username: str
+    password: str
+
+
 @router.post("/api/register")
-async def register(body: dict):
-    username = body.get("username")
-    password = body.get("password")
+async def register(body: AuthRequest):
+    username = body.username
+    password = body.password
     if not username or not password:
         raise HTTPException(status_code=400, detail="username and password required")
     result = await create_user(username, password)
@@ -137,9 +143,9 @@ async def register(body: dict):
 
 
 @router.post("/api/login")
-async def login(body: dict):
-    username = body.get("username")
-    password = body.get("password")
+async def login(body: AuthRequest):
+    username = body.username
+    password = body.password
     if not username or not password:
         raise HTTPException(status_code=400, detail="username and password required")
     user_id = await verify_user(username, password)

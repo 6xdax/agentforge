@@ -155,7 +155,7 @@ export default function App() {
     clearChatAndCreateNew()
   }, [logout, clearChatAndCreateNew])
 
-  const sendMessage = useCallback(async (text, filePaths = []) => {
+  const sendMessage = useCallback(async (text, uploadedFiles = []) => {
     if (!text.trim() || isGenerating) return
     if (!authToken) {
       openAuthModal('login')
@@ -168,6 +168,11 @@ export default function App() {
     const userMsg = {
       role: 'user',
       content: text,
+      attachments: uploadedFiles.map((item) => ({
+        fileName: item.fileName,
+        savedPath: item.savedPath,
+        size: item.size
+      })),
       timestamp: new Date().toISOString()
     }
 
@@ -203,7 +208,12 @@ export default function App() {
         chatId: currentChatId,
         authToken,
         apiUrl,
-        filePaths
+        filePaths: uploadedFiles.map((item) => item.savedPath),
+        fileAttachments: uploadedFiles.map((item) => ({
+          file_name: item.fileName,
+          saved_path: item.savedPath,
+          size: item.size
+        }))
       })
 
       schedulePersistChats(chats)

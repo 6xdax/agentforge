@@ -41,7 +41,7 @@ export default function MainContent({
   const handleSubmit = (e) => {
     e.preventDefault()
     if (inputValue.trim() && !isUploading) {
-      onSendMessage(inputValue, uploadedFiles.map((item) => item.savedPath))
+      onSendMessage(inputValue, uploadedFiles)
       setInputValue('')
       setUploadedFiles([])
     }

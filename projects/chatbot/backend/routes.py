@@ -18,7 +18,7 @@ from user_config import (
     update_skill_config as save_user_skill_config,
     update_tool_config as save_user_tool_config,
 )
-from models import ChatRequest, HistoryMessage, ToolCall
+from models import AttachmentRef, ChatRequest, HistoryMessage, ToolCall
 from session import session_manager
 from auth import verify_token
 from tools.file_parser import parse_document
@@ -83,8 +83,31 @@ async def chat_post(req: ChatRequest, user_id: str = Security(verify_token)):
     session_key = f"{user_id}:{req.chat_id}"
     user_dir = (user_data_root / user_id).resolve()
 
+    file_attachments: list[AttachmentRef] = []
+    if req.file_attachments:
+        file_attachments = [
+            AttachmentRef(
+                file_name=item.file_name,
+                saved_path=item.saved_path,
+                size=item.size,
+            )
+            for item in req.file_attachments
+            if item.saved_path
+        ]
+    elif req.file_paths:
+        file_attachments = [
+            AttachmentRef(
+                file_name=Path(raw_path).name,
+                saved_path=raw_path,
+            )
+            for raw_path in req.file_paths
+            if raw_path
+        ]
+
+    file_paths = [item.saved_path for item in file_attachments]
+
     parsed_file_blocks: list[str] = []
-    for raw_path in req.file_paths or []:
+    for raw_path in file_paths:
         try:
             raw_candidate = Path(raw_path)
             if raw_candidate.is_absolute():
@@ -182,7 +205,7 @@ async def chat_post(req: ChatRequest, user_id: str = Security(verify_token)):
                 # Store user message
                 await session_manager.add_to_history(
                     session_key,
-                    HistoryMessage(role="user", content=req.message)
+                    HistoryMessage(role="user", content=req.message, attachments=file_attachments or None)
                 )
                 # Store assistant response with thinking and tool_calls
                 await session_manager.add_to_history(
@@ -220,7 +243,7 @@ async def chat_post(req: ChatRequest, user_id: str = Security(verify_token)):
         # Store user message
         await session_manager.add_to_history(
             session_key,
-            HistoryMessage(role="user", content=req.message)
+            HistoryMessage(role="user", content=req.message, attachments=file_attachments or None)
         )
         # Store assistant response with thinking and tool_calls
         tool_calls = [
@@ -246,7 +269,22 @@ async def chat_post(req: ChatRequest, user_id: str = Security(verify_token)):
 @router.delete("/api/session/{chat_id}")
 async def delete_session(chat_id: str, user_id: str = Security(verify_token)):
     session_id = f"{user_id}:{chat_id}"
+    session_attachment_paths = await session_manager.get_session_attachment_paths(session_id)
+    other_attachment_paths = await session_manager.get_attachment_paths_for_other_sessions(user_id, session_id)
     success = await session_manager.delete_session(session_id)
+
+    to_delete = session_attachment_paths - other_attachment_paths
+    user_dir = (user_data_root / user_id).resolve()
+
+    for saved_path in to_delete:
+        try:
+            target = (user_data_root / saved_path).resolve()
+            if user_dir not in target.parents or not target.is_file():
+                continue
+            target.unlink(missing_ok=True)
+        except Exception as exc:
+            logger.warning(f"Failed to delete uploaded file for session {session_id}: {saved_path}, error={exc}")
+
     return {"success": success}
 
 

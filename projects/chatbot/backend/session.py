@@ -55,12 +55,16 @@ class SessionManager:
         tool_calls_json = None
         if message.tool_calls:
             tool_calls_json = json.dumps([tc.model_dump() for tc in message.tool_calls])
+        attachments_json = None
+        if message.attachments:
+            attachments_json = json.dumps([attachment.model_dump() for attachment in message.attachments])
         async with self._sessionmaker() as session:
             session.add(
                 Message(
                     session_id=session_id,
                     role=message.role,
                     content=message.content,
+                    attachments=attachments_json,
                     thinking=message.thinking,
                     tool_calls=tool_calls_json,
                     usage=json.dumps(message.usage) if message.usage else None,
@@ -98,6 +102,7 @@ class SessionManager:
                 "id": row.id,
                 "role": row.role,
                 "content": row.content,
+                "attachments": json.loads(row.attachments) if row.attachments else None,
                 "thinking": row.thinking,
                 "thinking_completed": bool(row.thinking),
                 "tool_calls": [ToolCall(**tc) for tc in json.loads(row.tool_calls)] if row.tool_calls else None,
@@ -106,6 +111,49 @@ class SessionManager:
             }
             for row in rows
         ]
+
+    async def get_session_attachment_paths(self, session_id: str) -> set[str]:
+        await self._ensure_tables()
+        async with self._sessionmaker() as session:
+            result = await session.scalars(
+                select(Message.attachments)
+                .where(Message.session_id == session_id)
+                .where(Message.attachments.is_not(None))
+            )
+            rows = result.all()
+        return self._extract_saved_paths(rows)
+
+    async def get_attachment_paths_for_other_sessions(self, user_id: str, exclude_session_id: str) -> set[str]:
+        await self._ensure_tables()
+        async with self._sessionmaker() as session:
+            result = await session.scalars(
+                select(Message.attachments)
+                .where(Message.session_id.like(f"{user_id}:%"))
+                .where(Message.session_id != exclude_session_id)
+                .where(Message.attachments.is_not(None))
+            )
+            rows = result.all()
+        return self._extract_saved_paths(rows)
+
+    @staticmethod
+    def _extract_saved_paths(attachments_rows: list[str | None]) -> set[str]:
+        paths: set[str] = set()
+        for raw in attachments_rows:
+            if not raw:
+                continue
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(parsed, list):
+                continue
+            for item in parsed:
+                if not isinstance(item, dict):
+                    continue
+                saved_path = item.get("saved_path")
+                if isinstance(saved_path, str) and saved_path:
+                    paths.add(saved_path)
+        return paths
 
     async def list_sessions(self, user_id: str) -> list[dict]:
         """List all sessions for a user with their first message title."""

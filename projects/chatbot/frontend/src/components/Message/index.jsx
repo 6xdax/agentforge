@@ -30,6 +30,7 @@ const Message = memo(function Message({ message, thinkingEnabled }) {
   const [expandedToolCalls, setExpandedToolCalls] = useState({})
   const isUser = message.role === 'user'
   const toolTraces = message.tool_traces || []
+  const attachments = message.attachments || []
 
   const toggleToolCall = useCallback((toolCallId) => {
     setExpandedToolCalls(prev => ({
@@ -102,6 +103,19 @@ const Message = memo(function Message({ message, thinkingEnabled }) {
         <div className={`message-body ${isUser ? 'user-bubble' : 'assistant-text'}`}>
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
         </div>
+
+        {attachments.length > 0 && (
+          <div className="message-attachments">
+            {attachments.map((file, idx) => (
+              <div key={`${file.savedPath || file.fileName || 'file'}-${idx}`} className="message-attachment-item">
+                <span className="message-attachment-name">{file.fileName || 'uploaded_file'}</span>
+                {typeof file.size === 'number' && (
+                  <span className="message-attachment-size">{Math.max(1, Math.round(file.size / 1024))} KB</span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
 
         {!isUser && message.usage && (
           <div className="usage-info">

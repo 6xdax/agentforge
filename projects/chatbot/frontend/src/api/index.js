@@ -104,6 +104,11 @@ export function parseHistoryToMessages(data) {
   return data.history.map((h) => ({
     role: h.role,
     content: h.content || '',
+    attachments: (h.attachments || []).map((item) => ({
+      fileName: item.file_name || item.fileName || 'uploaded_file',
+      savedPath: item.saved_path || item.savedPath || '',
+      size: item.size
+    })).filter((item) => item.savedPath),
     thinking: h.thinking || '',
     thinkingCompleted: h.thinking_completed ?? (!!h.thinking && h.thinking.length > 0),
     tool_calls: h.tool_calls?.map(tc => tc.name) || [],
