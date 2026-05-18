@@ -18,10 +18,13 @@ from user_config import (
     update_skill_config as save_user_skill_config,
     update_tool_config as save_user_tool_config,
 )
-from models import AttachmentRef, ChatRequest, HistoryMessage, ToolCall
+from models import AttachmentRef, ChatRequest, HistoryMessage, ToolCall, LinkSquareCreateRequest, LinkSquareUpdateRequest
 from session import session_manager
 from auth import verify_token
 from tools.file_parser import parse_document
+from db.database import create_sessionmaker_for, init_database
+from db.models import LinkSquare, User
+from sqlalchemy import select
 
 logger = logging.getLogger("chatbot")
 
@@ -35,6 +38,25 @@ INDEX_HEADERS = {
     "Pragma": "no-cache",
     "Expires": "0",
 }
+
+
+DB_PATH = "db/data/app.db"
+
+
+def _validate_link_payload(name: str, url: str) -> tuple[str, str]:
+    normalized_name = name.strip()
+    normalized_url = url.strip()
+    if not normalized_name:
+        raise HTTPException(status_code=400, detail="Link name is required")
+    if len(normalized_name) > 128:
+        raise HTTPException(status_code=400, detail="Link name must be <= 128 chars")
+    if not normalized_url:
+        raise HTTPException(status_code=400, detail="Link url is required")
+    if len(normalized_url) > 2048:
+        raise HTTPException(status_code=400, detail="Link url must be <= 2048 chars")
+    if not (normalized_url.startswith("/") or re.match(r"^https?://", normalized_url, flags=re.IGNORECASE)):
+        raise HTTPException(status_code=400, detail="Link url must start with / or http(s)://")
+    return normalized_name, normalized_url
 
 
 @router.get("/")
@@ -299,6 +321,108 @@ async def get_history(limit: int = 100, chat_id: str = ..., user_id: str = Secur
     session_id = f"{user_id}:{chat_id}"
     history = await session_manager.get_history(session_id, limit=limit)
     return {"history": history}
+
+
+@router.get("/api/square-links")
+async def list_square_links(user_id: str = Security(verify_token)):
+    await init_database(DB_PATH)
+    sessionmaker = create_sessionmaker_for(DB_PATH)
+    async with sessionmaker() as session:
+        rows = await session.scalars(select(LinkSquare).order_by(LinkSquare.created_at.desc(), LinkSquare.id.desc()))
+        links = [
+            {
+                "id": row.id,
+                "name": row.name,
+                "url": row.url,
+                "owner_user_id": row.owner_user_id,
+                "owner_username": row.owner_username,
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+                "is_mine": row.owner_user_id == user_id,
+            }
+            for row in rows.all()
+        ]
+    return {"links": links}
+
+
+@router.post("/api/square-links")
+async def create_square_link(req: LinkSquareCreateRequest, user_id: str = Security(verify_token)):
+    name, url = _validate_link_payload(req.name, req.url)
+    await init_database(DB_PATH)
+    sessionmaker = create_sessionmaker_for(DB_PATH)
+    async with sessionmaker() as session:
+        owner_username = await session.scalar(select(User.username).where(User.user_id == user_id))
+        if not owner_username:
+            raise HTTPException(status_code=401, detail="User not found")
+        now = int(time.time())
+        link = LinkSquare(
+            name=name,
+            url=url,
+            owner_user_id=user_id,
+            owner_username=owner_username,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(link)
+        await session.commit()
+        await session.refresh(link)
+    return {
+        "link": {
+            "id": link.id,
+            "name": link.name,
+            "url": link.url,
+            "owner_user_id": link.owner_user_id,
+            "owner_username": link.owner_username,
+            "created_at": link.created_at,
+            "updated_at": link.updated_at,
+            "is_mine": True,
+        }
+    }
+
+
+@router.put("/api/square-links/{link_id}")
+async def update_square_link(link_id: int, req: LinkSquareUpdateRequest, user_id: str = Security(verify_token)):
+    name, url = _validate_link_payload(req.name, req.url)
+    await init_database(DB_PATH)
+    sessionmaker = create_sessionmaker_for(DB_PATH)
+    async with sessionmaker() as session:
+        link = await session.scalar(select(LinkSquare).where(LinkSquare.id == link_id))
+        if not link:
+            raise HTTPException(status_code=404, detail="Link not found")
+        if link.owner_user_id != user_id:
+            raise HTTPException(status_code=403, detail="You can only edit your own links")
+        link.name = name
+        link.url = url
+        link.updated_at = int(time.time())
+        await session.commit()
+        await session.refresh(link)
+    return {
+        "link": {
+            "id": link.id,
+            "name": link.name,
+            "url": link.url,
+            "owner_user_id": link.owner_user_id,
+            "owner_username": link.owner_username,
+            "created_at": link.created_at,
+            "updated_at": link.updated_at,
+            "is_mine": True,
+        }
+    }
+
+
+@router.delete("/api/square-links/{link_id}")
+async def delete_square_link(link_id: int, user_id: str = Security(verify_token)):
+    await init_database(DB_PATH)
+    sessionmaker = create_sessionmaker_for(DB_PATH)
+    async with sessionmaker() as session:
+        link = await session.scalar(select(LinkSquare).where(LinkSquare.id == link_id))
+        if not link:
+            raise HTTPException(status_code=404, detail="Link not found")
+        if link.owner_user_id != user_id:
+            raise HTTPException(status_code=403, detail="You can only delete your own links")
+        await session.delete(link)
+        await session.commit()
+    return {"success": True}
 
 
 @router.get("/api/config/tools")

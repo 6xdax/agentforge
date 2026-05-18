@@ -13,6 +13,7 @@ export default function App() {
   const [isGenerating, setIsGenerating] = useState(false)
   const [thinkingEnabled, setThinkingEnabled] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [activeView, setActiveView] = useState('chat')
   const [configModalVisible, setConfigModalVisible] = useState(false)
   const [activeConfigTab, setActiveConfigTab] = useState('tools')
   const [configState, setConfigState] = useState({
@@ -135,10 +136,12 @@ export default function App() {
 
   const handleCreateNewChat = useCallback(() => {
     createNewChat()
+    setActiveView('chat')
     setSidebarOpen(false)
   }, [createNewChat])
 
   const handleSwitchChat = useCallback((chatId) => {
+    setActiveView('chat')
     switchChat(chatId)
     if (authToken && chatId && chatId !== 'server_history') {
       loadHistoryForChat(chatId, authToken)
@@ -423,6 +426,10 @@ export default function App() {
         onSwitchChat={handleSwitchChat}
         onDeleteChat={handleDeleteChat}
         onNewChat={handleCreateNewChat}
+        onOpenSquare={() => {
+          setActiveView('square')
+          setSidebarOpen(false)
+        }}
         isOpen={sidebarOpen}
         authUser={authUser}
         onLogout={handleLogout}
@@ -431,6 +438,7 @@ export default function App() {
       />
       <MainContent
         chat={currentChat}
+        activeView={activeView}
         isGenerating={isGenerating}
         thinkingEnabled={thinkingEnabled}
         onSendMessage={sendMessage}
@@ -439,6 +447,8 @@ export default function App() {
         onToggleThinking={() => setThinkingEnabled(!thinkingEnabled)}
         onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
         isAuthenticated={!!authToken}
+        authToken={authToken}
+        authUser={authUser}
         onLoginClick={() => openAuthModal('login')}
         onOpenToolConfig={() => openConfigModal('tools')}
         onOpenMcpConfig={() => openConfigModal('mcp')}

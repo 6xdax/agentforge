@@ -104,6 +104,49 @@ export async function apiUpdateConfig(token, type, payload) {
   return res.json()
 }
 
+export async function apiListSquareLinks(token) {
+  const res = await fetch(`${getApiBase()}/api/square-links`, {
+    headers: { 'Authorization': `Bearer ${token}` }
+  })
+  if (!res.ok) throw await parseErrorResponse(res, 'Failed to load square links')
+  return res.json()
+}
+
+export async function apiCreateSquareLink(token, payload) {
+  const res = await fetch(`${getApiBase()}/api/square-links`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  })
+  if (!res.ok) throw await parseErrorResponse(res, 'Failed to create link')
+  return res.json()
+}
+
+export async function apiUpdateSquareLink(token, linkId, payload) {
+  const res = await fetch(`${getApiBase()}/api/square-links/${linkId}`, {
+    method: 'PUT',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  })
+  if (!res.ok) throw await parseErrorResponse(res, 'Failed to update link')
+  return res.json()
+}
+
+export async function apiDeleteSquareLink(token, linkId) {
+  const res = await fetch(`${getApiBase()}/api/square-links/${linkId}`, {
+    method: 'DELETE',
+    headers: { 'Authorization': `Bearer ${token}` }
+  })
+  if (!res.ok) throw await parseErrorResponse(res, 'Failed to delete link')
+  return res.json()
+}
+
 export function parseServerTimestamp(value) {
   if (!value) return new Date().toISOString()
   if (typeof value === 'number') {

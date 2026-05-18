@@ -49,3 +49,13 @@ class HistoryMessage(BaseModel):
     thinking_completed: bool = False
     tool_calls: Optional[List[ToolCall]] = None
     usage: Optional[dict] = None
+
+
+class LinkSquareCreateRequest(BaseModel):
+    name: str
+    url: str
+
+
+class LinkSquareUpdateRequest(BaseModel):
+    name: str
+    url: str
