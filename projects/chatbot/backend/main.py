@@ -3,6 +3,7 @@ AgentForge Chatbot Backend - FastAPI entry point.
 """
 
 import sys
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -21,6 +22,7 @@ from fastapi.staticfiles import StaticFiles
 
 from session import session_manager
 from routes import router
+from ai_news import run_daily_ai_news_job
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,8 +35,14 @@ logger = logging.getLogger("chatbot")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await session_manager.create_session("default")
+    ai_news_task = asyncio.create_task(run_daily_ai_news_job())
     logger.info("Chatbot backend started!")
     yield
+    ai_news_task.cancel()
+    try:
+        await ai_news_task
+    except asyncio.CancelledError:
+        pass
     logger.info("Chatbot backend shutting down!")
 
 

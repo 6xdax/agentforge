@@ -1,10 +1,12 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import Message from '../Message'
 import WelcomeScreen from '../WelcomeScreen'
 import {
   apiCreateSquareLink,
   apiDeleteSquareLink,
+  apiListAiNews,
   apiListSquareLinks,
+  apiRefreshAiNews,
   apiUpdateSquareLink
 } from '../../api'
 import './styles.css'
@@ -49,6 +51,12 @@ export default function MainContent({
   const [editingSquareId, setEditingSquareId] = useState(null)
   const [squareName, setSquareName] = useState('')
   const [squareUrl, setSquareUrl] = useState('')
+  const [aiNewsItems, setAiNewsItems] = useState([])
+  const [aiNewsLoading, setAiNewsLoading] = useState(false)
+  const [aiNewsRefreshing, setAiNewsRefreshing] = useState(false)
+  const [aiNewsError, setAiNewsError] = useState('')
+  const [aiNewsSelectedDate, setAiNewsSelectedDate] = useState('')
+  const [aiNewsSortOrder, setAiNewsSortOrder] = useState('desc')
   const messagesEndRef = useRef(null)
   const fileInputRef = useRef(null)
   const messages = chat?.messages || []
@@ -83,6 +91,29 @@ export default function MainContent({
       }
     }
     loadSquare()
+    return () => {
+      cancelled = true
+    }
+  }, [activeView, authToken])
+
+  useEffect(() => {
+    if (activeView !== 'ai-news' || !authToken) return
+    let cancelled = false
+    const loadAiNews = async () => {
+      try {
+        setAiNewsLoading(true)
+        const data = await apiListAiNews(authToken, 80)
+        if (!cancelled) {
+          setAiNewsItems(data.items || [])
+          setAiNewsError('')
+        }
+      } catch (error) {
+        if (!cancelled) setAiNewsError(error.message || '加载 AI 资讯失败')
+      } finally {
+        if (!cancelled) setAiNewsLoading(false)
+      }
+    }
+    loadAiNews()
     return () => {
       cancelled = true
     }
@@ -204,7 +235,52 @@ export default function MainContent({
     }
   }
 
-  const currentChatTitle = activeView === 'square' ? '链接广场' : (chat?.title || '新对话')
+  const handleRefreshAiNews = async () => {
+    if (!authToken) {
+      onLoginClick?.()
+      return
+    }
+    try {
+      setAiNewsRefreshing(true)
+      await apiRefreshAiNews(authToken)
+      const data = await apiListAiNews(authToken, 80)
+      setAiNewsItems(data.items || [])
+      setAiNewsError('')
+    } catch (error) {
+      setAiNewsError(error.message || '刷新 AI 资讯失败')
+    } finally {
+      setAiNewsRefreshing(false)
+    }
+  }
+
+  const formatNewsTime = (raw) => {
+    if (!raw) return '未知时间'
+    const ts = Number(raw)
+    if (isNaN(ts)) return '未知时间'
+    const date = new Date(ts > 1e12 ? ts : ts * 1000)
+    return date.toLocaleString('zh-CN', { hour12: false })
+  }
+
+  const displayedAiNews = useMemo(() => {
+    const normalized = aiNewsItems.filter((item) => {
+      const ts = Number(item.published_at)
+      if (isNaN(ts)) return false
+      const ms = (ts > 1e12 ? ts : ts * 1000)
+      if (!aiNewsSelectedDate) return true
+      const itemDate = new Date(ms).toISOString().slice(0, 10)
+      if (itemDate !== aiNewsSelectedDate) return false
+      return true
+    })
+    return normalized.sort((a, b) => {
+      const ta = Number(a.published_at) || 0
+      const tb = Number(b.published_at) || 0
+      return aiNewsSortOrder === 'asc' ? ta - tb : tb - ta
+    })
+  }, [aiNewsItems, aiNewsSelectedDate, aiNewsSortOrder])
+
+  const currentChatTitle = activeView === 'square'
+    ? '链接广场'
+    : (activeView === 'ai-news' ? 'AI 资讯' : (chat?.title || '新对话'))
 
   return (
     <div className="main-content">
@@ -288,6 +364,70 @@ export default function MainContent({
                       <button type="button" className="square-card-btn danger" onClick={() => handleSquareDelete(link)}>删除</button>
                     </div>
                   ) : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : activeView === 'ai-news' ? (
+        <div className="square-page">
+          <div className="square-page-head">
+            <h2>AI 资讯</h2>
+            <p>每日自动抓取最新 AI 新闻，也可以手动刷新。</p>
+          </div>
+          <div className="square-page-toolbar">
+            <button
+              type="button"
+              className="square-new-btn"
+              onClick={handleRefreshAiNews}
+              disabled={aiNewsRefreshing}
+            >
+              {aiNewsRefreshing ? '刷新中...' : '刷新资讯'}
+            </button>
+            <div className="ai-news-toolbar-controls">
+              <label className="ai-news-control-label">
+                选择日期
+                <input
+                  type="date"
+                  className="ai-news-date"
+                  value={aiNewsSelectedDate}
+                  onChange={(e) => setAiNewsSelectedDate(e.target.value)}
+                />
+              </label>
+              <label className="ai-news-control-label">
+                排序
+                <select
+                  className="ai-news-select"
+                  value={aiNewsSortOrder}
+                  onChange={(e) => setAiNewsSortOrder(e.target.value)}
+                >
+                  <option value="desc">新到旧</option>
+                  <option value="asc">旧到新</option>
+                </select>
+              </label>
+              <button
+                type="button"
+                className="ai-news-clear-btn"
+                onClick={() => setAiNewsSelectedDate('')}
+                disabled={!aiNewsSelectedDate}
+              >
+                清空日期
+              </button>
+            </div>
+          </div>
+          {aiNewsError ? <div className="square-error">{aiNewsError}</div> : null}
+          <div className="square-list">
+            {aiNewsLoading ? <div className="square-meta">加载中...</div> : null}
+            {!aiNewsLoading && displayedAiNews.length === 0 ? <div className="square-meta">当前条件下暂无资讯，可调整日期或点击刷新。</div> : null}
+            {displayedAiNews.map((item) => (
+              <div key={item.id} className="square-card">
+                <a href={item.url} target="_blank" rel="noopener noreferrer" className="square-card-title">
+                  {item.title}
+                </a>
+                <div className="square-card-url">{item.summary || item.url}</div>
+                <div className="square-card-bottom">
+                  <span className="square-meta">来源: {item.source || 'Unknown'}</span>
+                  <span className="square-meta">{formatNewsTime(item.published_at)}</span>
                 </div>
               </div>
             ))}

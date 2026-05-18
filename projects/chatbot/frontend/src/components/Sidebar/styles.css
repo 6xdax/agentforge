@@ -219,6 +219,18 @@
   height: 16px;
 }
 
+.ai-news-entry-btn {
+  border-style: solid;
+  border-color: #cde0b5;
+  background: #f8fff1;
+  color: #3f6212;
+}
+
+.ai-news-entry-btn:hover {
+  background: #ecfbd8;
+  border-color: #a3c978;
+}
+
 .resource-add-form {
   margin-top: 8px;
   display: flex;

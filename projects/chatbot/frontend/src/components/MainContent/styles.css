@@ -77,6 +77,11 @@
 .square-page-toolbar {
   max-width: 900px;
   margin: 0 auto 12px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .square-new-btn {
@@ -92,6 +97,59 @@
 
 .square-new-btn:hover {
   background: #dbeafe;
+}
+
+.ai-news-toolbar-controls {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ai-news-control-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.ai-news-date,
+.ai-news-select {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: #ffffff;
+}
+
+.ai-news-date:focus,
+.ai-news-select:focus {
+  outline: none;
+  border-color: #93c5fd;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.14);
+}
+
+.ai-news-clear-btn {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--text-secondary);
+  font-size: 12px;
+  padding: 6px 10px;
+  cursor: pointer;
+  height: 32px;
+}
+
+.ai-news-clear-btn:hover:not(:disabled) {
+  background: var(--bg-soft);
+  color: var(--text-primary);
+}
+
+.ai-news-clear-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .square-form {

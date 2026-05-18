@@ -430,6 +430,10 @@ export default function App() {
           setActiveView('square')
           setSidebarOpen(false)
         }}
+        onOpenAiNews={() => {
+          setActiveView('ai-news')
+          setSidebarOpen(false)
+        }}
         isOpen={sidebarOpen}
         authUser={authUser}
         onLogout={handleLogout}

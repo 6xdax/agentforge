@@ -147,6 +147,23 @@ export async function apiDeleteSquareLink(token, linkId) {
   return res.json()
 }
 
+export async function apiListAiNews(token, limit = 50) {
+  const res = await fetch(`${getApiBase()}/api/ai-news?limit=${limit}`, {
+    headers: { 'Authorization': `Bearer ${token}` }
+  })
+  if (!res.ok) throw await parseErrorResponse(res, 'Failed to load AI news')
+  return res.json()
+}
+
+export async function apiRefreshAiNews(token) {
+  const res = await fetch(`${getApiBase()}/api/ai-news/refresh`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}` }
+  })
+  if (!res.ok) throw await parseErrorResponse(res, 'Failed to refresh AI news')
+  return res.json()
+}
+
 export function parseServerTimestamp(value) {
   if (!value) return new Date().toISOString()
   if (typeof value === 'number') {

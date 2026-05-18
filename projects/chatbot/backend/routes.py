@@ -23,8 +23,9 @@ from session import session_manager
 from auth import verify_token
 from tools.file_parser import parse_document
 from db.database import create_sessionmaker_for, init_database
-from db.models import LinkSquare, User
+from db.models import LinkSquare, User, AiNewsItem
 from sqlalchemy import select
+from ai_news import crawl_and_store_ai_news
 
 logger = logging.getLogger("chatbot")
 
@@ -468,6 +469,39 @@ async def update_skill_config(req: dict, user_id: str = Security(verify_token)):
         raise HTTPException(status_code=400, detail=str(exc))
     session_manager.reset_user_sessions(user_id)
     return {"status": "ok", "config": result}
+
+
+@router.get("/api/ai-news")
+async def list_ai_news(limit: int = 50, user_id: str = Security(verify_token)):
+    safe_limit = max(1, min(limit, 200))
+    await init_database(DB_PATH)
+    sessionmaker = create_sessionmaker_for(DB_PATH)
+    async with sessionmaker() as session:
+        rows = await session.scalars(
+            select(AiNewsItem)
+            .order_by(AiNewsItem.published_at.desc(), AiNewsItem.id.desc())
+            .limit(safe_limit)
+        )
+        items = [
+            {
+                "id": row.id,
+                "title": row.title,
+                "url": row.url,
+                "source": row.source,
+                "summary": row.summary,
+                "published_at": row.published_at,
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+            }
+            for row in rows.all()
+        ]
+    return {"items": items}
+
+
+@router.post("/api/ai-news/refresh")
+async def refresh_ai_news(user_id: str = Security(verify_token)):
+    stats = await crawl_and_store_ai_news()
+    return {"status": "ok", "stats": stats}
 
 
 @router.get("/{full_path:path}")

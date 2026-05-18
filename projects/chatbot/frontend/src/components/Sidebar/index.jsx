@@ -8,6 +8,7 @@ export default function Sidebar({
   onDeleteChat,
   onNewChat,
   onOpenSquare,
+  onOpenAiNews,
   isOpen,
   authUser,
   onLogout,
@@ -61,6 +62,13 @@ export default function Sidebar({
             <path d="M8 11h8M8 15h5" />
           </svg>
           链接广场
+        </button>
+        <button className="square-entry-btn ai-news-entry-btn" type="button" onClick={onOpenAiNews}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M4 4h16v16H4z" />
+            <path d="M8 8h8M8 12h8M8 16h5" />
+          </svg>
+          AI 资讯
         </button>
       </div>
       <div className="chat-list">
