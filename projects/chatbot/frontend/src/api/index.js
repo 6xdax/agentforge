@@ -83,6 +83,27 @@ export async function apiUploadUserFile(token, file, maxTextLength = 12000) {
   return res.json()
 }
 
+export async function apiGetConfig(token, type) {
+  const res = await fetch(`${getApiBase()}/api/config/${type}`, {
+    headers: { 'Authorization': `Bearer ${token}` }
+  })
+  if (!res.ok) throw await parseErrorResponse(res, 'Failed to load config')
+  return res.json()
+}
+
+export async function apiUpdateConfig(token, type, payload) {
+  const res = await fetch(`${getApiBase()}/api/config/${type}`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  })
+  if (!res.ok) throw await parseErrorResponse(res, 'Failed to save config')
+  return res.json()
+}
+
 export function parseServerTimestamp(value) {
   if (!value) return new Date().toISOString()
   if (typeof value === 'number') {

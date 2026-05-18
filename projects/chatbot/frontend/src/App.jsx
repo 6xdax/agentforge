@@ -1,8 +1,9 @@
 import { useState, useRef, useCallback } from 'react'
 import AuthModal from './components/AuthModal'
+import ConfigModal from './components/ConfigModal'
 import Sidebar from './components/Sidebar'
 import MainContent from './components/MainContent'
-import { apiUploadUserFile } from './api'
+import { apiGetConfig, apiUpdateConfig, apiUploadUserFile } from './api'
 import { useAuth } from './hooks/useAuth'
 import { useChats } from './hooks/useChats'
 import { useTypewriter } from './hooks/useTypewriter'
@@ -12,6 +13,13 @@ export default function App() {
   const [isGenerating, setIsGenerating] = useState(false)
   const [thinkingEnabled, setThinkingEnabled] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [configModalVisible, setConfigModalVisible] = useState(false)
+  const [activeConfigTab, setActiveConfigTab] = useState('tools')
+  const [configState, setConfigState] = useState({
+    tools: { items: [], loading: false, saving: false, loaded: false },
+    mcp: { items: [], loading: false, saving: false, loaded: false },
+    skills: { items: [], loading: false, saving: false, loaded: false }
+  })
 
   const hasStreamedContentRef = useRef(false)
 
@@ -280,6 +288,109 @@ export default function App() {
     }
   }, [authToken, openAuthModal, handleAuthExpired])
 
+  const loadConfigTab = useCallback(async (tab) => {
+    if (!authToken) {
+      openAuthModal('login')
+      return
+    }
+
+    setConfigState((prev) => ({
+      ...prev,
+      [tab]: { ...prev[tab], loading: true }
+    }))
+
+    try {
+      const data = await apiGetConfig(authToken, tab)
+      const items = (data.items || []).map((item) => ({
+        name: item.name,
+        description: item.description || item.path || '',
+        enabled: item.enabled !== false
+      }))
+      setConfigState((prev) => ({
+        ...prev,
+        [tab]: { ...prev[tab], items, loaded: true, loading: false }
+      }))
+    } catch (error) {
+      setConfigState((prev) => ({
+        ...prev,
+        [tab]: { ...prev[tab], loading: false }
+      }))
+      if (error.status === 401) {
+        handleAuthExpired()
+      }
+      throw error
+    }
+  }, [authToken, openAuthModal, handleAuthExpired])
+
+  const openConfigModal = useCallback(async (tab) => {
+    if (!authToken) {
+      openAuthModal('login')
+      return
+    }
+    setActiveConfigTab(tab)
+    setConfigModalVisible(true)
+    try {
+      if (!configState[tab]?.loaded) {
+        await loadConfigTab(tab)
+      }
+    } catch (error) {
+      console.error('Load config failed:', error)
+    }
+  }, [authToken, openAuthModal, configState, loadConfigTab])
+
+  const switchConfigTab = useCallback(async (tab) => {
+    setActiveConfigTab(tab)
+    if (!configState[tab]?.loaded) {
+      await loadConfigTab(tab)
+    }
+  }, [configState, loadConfigTab])
+
+  const toggleConfigItem = useCallback((tab, name, enabled) => {
+    setConfigState((prev) => ({
+      ...prev,
+      [tab]: {
+        ...prev[tab],
+        items: prev[tab].items.map((item) => (
+          item.name === name ? { ...item, enabled } : item
+        ))
+      }
+    }))
+  }, [])
+
+  const saveConfigTab = useCallback(async (tab) => {
+    if (!authToken) {
+      openAuthModal('login')
+      return
+    }
+
+    const payload = {}
+    for (const item of configState[tab].items) {
+      payload[item.name] = !!item.enabled
+    }
+
+    setConfigState((prev) => ({
+      ...prev,
+      [tab]: { ...prev[tab], saving: true }
+    }))
+
+    try {
+      await apiUpdateConfig(authToken, tab, payload)
+      setConfigState((prev) => ({
+        ...prev,
+        [tab]: { ...prev[tab], saving: false }
+      }))
+    } catch (error) {
+      setConfigState((prev) => ({
+        ...prev,
+        [tab]: { ...prev[tab], saving: false }
+      }))
+      if (error.status === 401) {
+        handleAuthExpired()
+      }
+      throw error
+    }
+  }, [authToken, configState, openAuthModal, handleAuthExpired])
+
   const currentChat = chats[currentChatId]
 
   return (
@@ -297,6 +408,15 @@ export default function App() {
           error={authError}
         />
       )}
+      <ConfigModal
+        visible={configModalVisible}
+        activeTab={activeConfigTab}
+        onClose={() => setConfigModalVisible(false)}
+        onSwitchTab={switchConfigTab}
+        state={configState}
+        onToggle={toggleConfigItem}
+        onSave={saveConfigTab}
+      />
       <Sidebar
         chats={chats}
         currentChatId={currentChatId}
@@ -320,6 +440,9 @@ export default function App() {
         onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
         isAuthenticated={!!authToken}
         onLoginClick={() => openAuthModal('login')}
+        onOpenToolConfig={() => openConfigModal('tools')}
+        onOpenMcpConfig={() => openConfigModal('mcp')}
+        onOpenSkillConfig={() => openConfigModal('skills')}
       />
     </div>
   )

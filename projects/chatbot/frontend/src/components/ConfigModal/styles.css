@@ -1,0 +1,145 @@
+.config-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(12, 18, 31, 0.42);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1200;
+  padding: 20px;
+}
+
+.config-modal {
+  width: min(680px, 100%);
+  max-height: calc(100vh - 40px);
+  overflow: auto;
+  background: #ffffff;
+  border: 1px solid #d7dfec;
+  border-radius: 16px;
+  box-shadow: 0 18px 48px rgba(11, 29, 63, 0.24);
+}
+
+.config-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 18px;
+  border-bottom: 1px solid #e6ebf4;
+}
+
+.config-modal-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #122037;
+}
+
+.config-modal-close {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 20px;
+  color: #60708f;
+}
+
+.config-modal-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 12px 18px;
+  border-bottom: 1px solid #eef2f8;
+}
+
+.config-modal-tab {
+  border: 1px solid #dbe3f0;
+  background: #fff;
+  color: #394d70;
+  border-radius: 999px;
+  font-size: 12px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.config-modal-tab.active {
+  background: #ecf4ff;
+  border-color: #bfd6ff;
+  color: #1e40af;
+}
+
+.config-modal-body {
+  padding: 14px 18px 18px;
+}
+
+.config-modal-error {
+  background: #fff1f2;
+  color: #b42318;
+  border: 1px solid #fecdd3;
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+
+.config-modal-empty {
+  font-size: 13px;
+  color: #64748b;
+  padding: 16px 0;
+}
+
+.config-modal-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.config-modal-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border: 1px solid #e7edf7;
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: #fbfcff;
+}
+
+.config-modal-item input {
+  margin-top: 2px;
+}
+
+.config-modal-item-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.config-modal-item-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #10243f;
+}
+
+.config-modal-item-desc {
+  font-size: 12px;
+  color: #5f7092;
+  margin-top: 3px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.config-modal-actions {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.config-modal-save-btn {
+  border: none;
+  background: #2563eb;
+  color: #fff;
+  border-radius: 10px;
+  font-size: 13px;
+  padding: 8px 14px;
+  cursor: pointer;
+}
+
+.config-modal-save-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}

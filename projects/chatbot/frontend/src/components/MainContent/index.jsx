@@ -16,7 +16,10 @@ export default function MainContent({
   onToggleThinking,
   onToggleSidebar,
   isAuthenticated,
-  onLoginClick
+  onLoginClick,
+  onOpenToolConfig,
+  onOpenMcpConfig,
+  onOpenSkillConfig
 }) {
   const [inputValue, setInputValue] = useState('')
   const [isUploading, setIsUploading] = useState(false)
@@ -230,7 +233,11 @@ export default function MainContent({
                 </svg>
                 深度思考
               </button>
-              <button type="button" className="toolbar-btn">
+              <button
+                type="button"
+                className="toolbar-btn"
+                onClick={onOpenToolConfig}
+              >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <rect x="3" y="3" width="7" height="7" />
                   <rect x="14" y="3" width="7" height="7" />
@@ -239,7 +246,11 @@ export default function MainContent({
                 </svg>
                 工具配置
               </button>
-              <button type="button" className="toolbar-btn">
+              <button
+                type="button"
+                className="toolbar-btn"
+                onClick={onOpenMcpConfig}
+              >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <rect x="2" y="2" width="20" height="8" rx="2" />
                   <rect x="2" y="14" width="20" height="8" rx="2" />
@@ -248,7 +259,11 @@ export default function MainContent({
                 </svg>
                 MCP配置
               </button>
-              <button type="button" className="toolbar-btn">
+              <button
+                type="button"
+                className="toolbar-btn"
+                onClick={onOpenSkillConfig}
+              >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M14.5 10c-.83 0-1.5-.67-1.5-1.5v-5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5v5c0 .83-.67 1.5-1.5 1.5z" />
                   <path d="M20.5 10H19V8.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z" />
